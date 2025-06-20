@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.12)
+project(filetransfer)
+
+include_directories(${CMAKE_SOURCE_DIR}/headers)
+include_directories(${CMAKE_SOURCE_DIR}/programs)
+
+add_library(network_lib programs/network.cpp)
+add_library(Filefunction_lib programs/zipper.cpp)
+add_library(transfer programs/smb.cpp)
+
+#add_executable(zipper programs/zipper.cpp)
+#add_executable(network programs/network.cpp)
+#add_executable(tcptrasfer programs/tcptransfer.cpp)
+#add_executable(filetransfer main.cpp programs/network.cpp programs/zipper.cpp programs/tcptransfer.cpp) 
+
+add_executable(file_transfer main.cpp)
+target_link_libraries(file_transfer network_lib transfer Filefunction_lib)
