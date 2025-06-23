@@ -44,25 +44,22 @@ string get_subnet(const string& ip) {
     return ip.substr(0, last_dot) + ".0/24";  // Convert to CIDR format (e.g., 192.168.1.0/24)
 }
 
-void scan_network(const string& subnet, const string& local_ip) {
+std::vector<std::string> scan_network(const string& subnet, const string& local_ip) {
+    std::vector<std::string> connected_devices;
+
     if (subnet.empty()) {
-        cout << " Invalid subnet or not connected to a network!" << endl;
-        return;
+        connected_devices.push_back("Invalid subnet or not connected to a network");
+        return connected_devices;
     }
 
-    cout << " Scanning network: " << subnet << "...\n";
-    
-    string command = "nmap -sn " + subnet + " > nmap_output.txt";  // Redirect output to a file
+    string command = "nmap -sn " + subnet + " > nmap_output.txt";
     system(command.c_str());
 
-    // Read the output from the file
-    vector<pair<string, string>> connected_devices;
     string line, ip, mac, device;
     bool found_ip = false;
 
     ifstream infile("nmap_output.txt");
     while (getline(infile, line)) {
-        // Match "Nmap scan report for <IP>"
         smatch match;
         if (regex_search(line, match, regex(R"(Nmap scan report for (\d+\.\d+\.\d+\.\d+))"))) {
             ip = match[1].str();
@@ -70,28 +67,16 @@ void scan_network(const string& subnet, const string& local_ip) {
             mac = "Unknown";
             device = "Unknown";
         }
-        // Match "MAC Address: <MAC> (<Vendor>)"
         else if (found_ip && regex_search(line, match, regex(R"(MAC Address: ([0-9A-Fa-f:]+) \((.*?)\))"))) {
             mac = match[1].str();
             device = match[2].str();
         }
 
         if (found_ip) {
-            connected_devices.push_back({ip, device});
+            connected_devices.push_back(ip + " (" + device + ")");
             found_ip = false;
         }
     }
     infile.close();
-   // system("del nmap_output.txt");  // Delete temp file
-
-    // Display the results
-    cout << "\n Local IP Address: " << local_ip << endl;
-    cout << " Connected Devices:\n";
-    for (const auto& entry : connected_devices) {
-        if (!entry.first.empty()) { 
-            cout << "  - " << entry.first << " (" << entry.second << ")" << endl;
-        }
-    }
-
-    cout << "\n Scan complete!\n";
+    return connected_devices;
 }

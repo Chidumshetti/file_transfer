@@ -16,4 +16,4 @@ using namespace std;
 
 string get_network_ip();
 string get_subnet(const string& ip);
-void scan_network(const string& subnet, const string& local_ip);
+std::vector<std::string> scan_network(const string& subnet, const string& local_ip);
