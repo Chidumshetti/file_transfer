@@ -1,7 +1,5 @@
 #include "../headers/network.h"
-#include "../headers/smb.h"
-#include "../headers/zipper.h"
-#include "../headers/port.h"
+#include "../headers/Send_recieve.h"
 #include <iostream>
 
 using namespace std;
@@ -21,40 +19,44 @@ int main() {
     string subnet = get_subnet(local_ip);
     cout << "Subnet for scanning: " << subnet << endl;
 
-    // Scan the network
-    scan_network(subnet, local_ip);
+    // 🟢 STORE returned IPs
+    std::vector<std::string> ips = scan_network(subnet, local_ip);
 
-    // Ask the user for a directory to zip
-    cout << "\nEnter directory path to zip: ";
-    string dir_path;
-    cin >> dir_path;
-
-    string zipped_file = zip_directory(dir_path);
-    if (zipped_file.empty()) {
-        cerr << "Zipping failed!" << endl;
-        return 1;
+    // 🟢 PRINT the scanned IPs
+    std::cout << "\nDiscovered Devices:\n";
+    for (const std::string& ip : ips) {
+        std::cout << " - " << ip << std::endl;
     }
-    cout << "Zipped file: " << zipped_file << endl;
 
-    // Ask the user for target details
+    string dir_path;
+  
     cout << "\nEnter target IP for file transfer: ";
     string target_ip;
     cin >> target_ip;
 
-    if((copy_file_smb(zipped_file, "E:\\"))){
-        cout<<"File trasfered succefully !";
-    } 
-    else {
-        cout<<"Unsuccesfull !";
-    }
-
-    if(copy_file_robocopy(zipped_file, "E:\\")){
-        cout<<"File trasfered succefully !";
-    } 
-    else {
-        cout<<"Unsuccesfull !";
-    }
-
+    string network_path = "\\\\" + target_ip + "\\D:\\";
+    // You can now call run_transfer as needed here, e.g.:
+    // int result = run_transfer("send", target_ip, "12345", dir_path);
     cout << "\nOperations complete!\n";
     return 0;
+}
+
+int run_transfer(const std::string& mode, const std::string& ip_or_port, const std::string& port_or_outputdir, const std::string& directory = "") {
+    if (mode == "receive") {
+        int port = std::atoi(ip_or_port.c_str()); // ip_or_port is port in this mode
+        const std::string& output_dir = port_or_outputdir;
+        return receive_directory(port, output_dir) ? 0 : 1;
+    } 
+    else if (mode == "send") {
+        // ip_or_port = IP address
+        // port_or_outputdir = port (string)
+        // directory = directory path to send
+        int port = std::atoi(port_or_outputdir.c_str());
+        return send_directory(directory, ip_or_port, port) ? 0 : 1;
+
+    } 
+    else {
+        std::cerr << "Invalid mode: " << mode << "\n";
+        return 1;
+    }
 }
