@@ -1,0 +1,17 @@
+cmake_minimum_required(VERSION 3.12)
+project(filetransfer)
+
+set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
+
+include_directories(${CMAKE_SOURCE_DIR}/headers)
+include_directories(${CMAKE_SOURCE_DIR}/programs)
+
+add_library(network_lib programs/network.cpp)
+add_library(transfer_lib programs/Send_recieve.cpp)
+
+#add_executable(network programs/network.cpp)
+#add_executable(tcptrasfer programs/Send_recieve.cpp)
+#add_executable(filetransfer main.cpp programs/network.cpp programs/zipper.cpp programs/tcptransfer.cpp) 
+
+add_executable(file_transfer main.cpp)
+target_link_libraries(file_transfer network_lib transfer_lib)

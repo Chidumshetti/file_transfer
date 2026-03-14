@@ -1,0 +1,12 @@
+{
+  "main": "main.js",
+  "scripts": {
+    "start": "react-scripts start",
+    "electron": "electron . --disable-gpu",
+    "build": "react-scripts build",
+    "electron-pack": "npm run build && electron ."
+  },
+  "devDependencies": {
+    "electron": "^29.4.6"
+  }
+}
