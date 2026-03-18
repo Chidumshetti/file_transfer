@@ -1,113 +1,167 @@
-name: Build & Package (Linux)
+name: Build & Release
 
 on:
   push:
     branches: [ "chida/major_update" ]
+    tags:
+      - "v*"                          # triggers GitHub Release
   pull_request:
     branches: [ "chida/major_update" ]
-  workflow_dispatch: # allows manual trigger from GitHub UI
+  workflow_dispatch:
 
 jobs:
   build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-20.04
+            platform: linux
+            artifact_name: linux-ubuntu20
+
+          - os: ubuntu-22.04
+            platform: linux
+            artifact_name: linux-ubuntu22
+
+          - os: ubuntu-24.04
+            platform: linux
+            artifact_name: linux-ubuntu24
+
+          - os: windows-latest
+            platform: windows
+            artifact_name: windows-x64
+
     runs-on: ${{ matrix.os }}
 
-    strategy:
-      fail-fast: false   # don't cancel other jobs if one distro fails
-      matrix:
-        os: [ ubuntu-20.04, ubuntu-22.04, ubuntu-24.04 ]
-
     steps:
-      # ── 1. Checkout ────────────────────────────────────────────────────────
+      # ── 1. Checkout ──────────────────────────────────────────────────────
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ── 2. Setup Node.js ───────────────────────────────────────────────────
+      # ── 2. Setup Node.js ─────────────────────────────────────────────────
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '20'
           cache: 'npm'
 
-      # ── 3. Install system deps needed to compile native addons ─────────────
-      - name: Install native build dependencies
+      # ── 3. OS-level build deps ───────────────────────────────────────────
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
             build-essential \
             python3 \
-            python3-pip \
             libusb-1.0-0-dev \
-            libudev-dev
+            libudev-dev \
+            upx-ucl
 
-      # ── 4. Build Node Native Addon (addon/) ────────────────────────────────
-      - name: Install addon dependencies
+      - name: Install Windows build dependencies
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: npm install --global node-gyp
+
+      # ════════════════════════════════════════════════════════════════════
+      # STEP A : addon — npm i → node-gyp configure → node-gyp build
+      # ════════════════════════════════════════════════════════════════════
+      - name: addon — npm install
         working-directory: addon
-        run: npm ci
+        run: npm i
 
-      - name: Build native addon
+      - name: addon — node-gyp configure
         working-directory: addon
-        run: npm run build
-        # node-gyp compiles wraperfunction.node into addon/build/Release/
+        run: npx node-gyp configure
 
-      # ── 5. Copy wraperfunction.node → electron/ ────────────────────────────
-      - name: Copy wraperfunction.node into electron
-        run: |
-          # node-gyp outputs to addon/build/Release/ by default
-          ADDON_FILE="addon/build/Release/wraperfunction.node"
+      - name: addon — node-gyp build
+        working-directory: addon
+        run: npx node-gyp build
 
-          if [ ! -f "$ADDON_FILE" ]; then
-            echo "wraperfunction.node not found at $ADDON_FILE"
-            echo "Searching for .node files in addon/build/:"
-            find addon/build -name "*.node" 2>/dev/null || echo "No .node files found"
-            exit 1
-          fi
+      # cp ./build/Release/wraperfunction.node ../electron/wraperfunction.node
+      - name: Copy wraperfunction.node → electron/ (Linux)
+        if: matrix.platform == 'linux'
+        run: cp addon/build/Release/wraperfunction.node electron/wraperfunction.node
 
-          # Change the destination path below if electron expects it elsewhere
-          mkdir -p electron/addons
-          cp "$ADDON_FILE" electron/addons/wraperfunction.node
-          echo "wraperfunction.node copied to electron/addons/"
+      - name: Copy wraperfunction.node → electron/ (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Copy-Item addon\build\Release\wraperfunction.node electron\wraperfunction.node
 
-      # ── 6. Build React Frontend (frontend/) ───────────────────────────────
-      - name: Install frontend dependencies
+      # ════════════════════════════════════════════════════════════════════
+      # STEP B : frontend — npm i → npm run build
+      # ════════════════════════════════════════════════════════════════════
+      - name: frontend — npm install
         working-directory: frontend
-        run: npm ci
+        run: npm i
 
-      - name: Build React app
+      - name: frontend — npm run build
         working-directory: frontend
-        run: npm run build
-        # Vite  → frontend/dist
-        # CRA   → frontend/build
-
-      # ── 7. Copy React build → electron/ ───────────────────────────────────
-      - name: Copy React build into electron
-        run: |
-          # Vite → frontend/dist  |  CRA → change to frontend/build
-          rm -rf electron/dist
-          cp -r frontend/dist electron/dist
-          echo "React build copied to electron/dist"
-
-      # ── 8. Install Electron dependencies ──────────────────────────────────
-      - name: Install electron dependencies
-        working-directory: electron
-        run: npm ci
-
-      # ── 9. Build & Package Electron app ───────────────────────────────────
-      - name: Build Electron app (Linux)
-        working-directory: electron
         run: npm run build
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_ENV: production
+          GENERATE_SOURCEMAP: false     # skips sourcemaps → smaller bundle
 
-      # ── 10. Upload per-distro artifact ────────────────────────────────────
-      - name: Upload Electron Linux build
+      # cp ./build/ ../electron/build  (matches your "build/**/*" in package.json)
+      - name: Copy React build → electron/build (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          rm -rf electron/build
+          cp -r frontend/build electron/build
+
+      - name: Copy React build → electron/build (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          if (Test-Path electron\build) { Remove-Item -Recurse -Force electron\build }
+          Copy-Item -Recurse frontend\build electron\build
+
+      # ════════════════════════════════════════════════════════════════════
+      # STEP C : electron — npm i → electron-builder
+      # ════════════════════════════════════════════════════════════════════
+      - name: electron — npm install
+        working-directory: electron
+        run: npm i
+
+      # Windows: uses "dist" script from your package.json (--win --x64)
+      - name: electron — build Windows
+        if: matrix.platform == 'windows'
+        working-directory: electron
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_ENV: production
+
+      # Linux: override to --linux --x64 since your package.json only has --win
+      - name: electron — build Linux
+        if: matrix.platform == 'linux'
+        working-directory: electron
+        run: npx electron-builder --linux --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_ENV: production
+
+      # ── Upload artifact (every push) ─────────────────────────────────────
+      - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
-          # artifact name includes the distro so each matrix job uploads separately
-          name: electron-build-${{ matrix.os }}
+          name: ${{ matrix.artifact_name }}
           path: |
+            electron/dist/*.exe
             electron/dist/*.AppImage
             electron/dist/*.deb
-            electron/dist/*.rpm
-            electron/out/make/**/*
+            electron/dist/latest*.yml
           if-no-files-found: warn
           retention-days: 7
+
+      # ── Upload to GitHub Release (only on v* tag push) ───────────────────
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            electron/dist/*.exe
+            electron/dist/*.AppImage
+            electron/dist/*.deb
+            electron/dist/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
