@@ -6,8 +6,15 @@ const SendPanel = ({ onNavigate }) => {
   const DEFAULT_PORT = "5000";
 
   const [step, setStep] = useState("scan"); // scan | select | transfer
-  const [ips, setIps] = useState([]);
+  const [devices, setDevices] = useState([]); // [{ ip, name }]
   const [selectedIp, setSelectedIp] = useState("");
+
+  // Parse "192.168.1.5 (DeviceName)" → { ip, name }
+  const parseDevice = (raw) => {
+    const match = raw.match(/^([\d.]+)\s*\((.+)\)$/);
+    if (match) return { ip: match[1], name: match[2] };
+    return { ip: raw.trim(), name: "Unknown" };
+  };
   const [directory, setDirectory] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
@@ -29,17 +36,19 @@ const SendPanel = ({ onNavigate }) => {
   const handleScan = async () => {
     if (!addon) return;
     setIsScanning(true);
-    setIps([]);
+    setDevices([]);
+    setSelectedIp("");
     setStep("scan");
     // yield to React so the scanning UI renders before the blocking native call
     await new Promise(resolve => setTimeout(resolve, 50));
     try {
-      const scannedIps = addon.scanNetwork();
-      setIps(scannedIps || []);
-      setStep("select");
+      const raw = addon.scanNetwork();
+      const parsed = (raw || []).map(parseDevice);
+      setDevices(parsed);
+      setStep(parsed.length > 0 ? "select" : "scan");
     } catch (err) {
       console.error("Scan failed:", err);
-      setIps([]);
+      setDevices([]);
       setStep("scan");
     } finally {
       setIsScanning(false);
@@ -97,7 +106,7 @@ const SendPanel = ({ onNavigate }) => {
 
   const handleReset = () => {
     setStep("scan");
-    setIps([]);
+    setDevices([]);
     setSelectedIp("");
     setDirectory("");
     setTransferStatus(null);
@@ -182,21 +191,24 @@ const SendPanel = ({ onNavigate }) => {
                 <span style={styles.scanningLabel}>Probing network hosts...</span>
               </div>
             )}
-            {ips.length > 0 && (
+            {devices.length > 0 && (
               <div style={styles.ipGrid}>
-                {ips.map((ip, i) => (
+                {devices.map((dev, i) => (
                   <div
                     key={i}
-                    style={{...styles.ipTag, ...(selectedIp === ip ? styles.ipTagSelected : {})}}
-                    onClick={() => setSelectedIp(ip)}
+                    style={{...styles.ipTag, ...(selectedIp === dev.ip ? styles.ipTagSelected : {})}}
+                    onClick={() => setSelectedIp(dev.ip)}
                   >
                     <span style={styles.ipDot}></span>
-                    {ip}
+                    <div style={{ display: "flex", flexDirection: "column", gap: "2px" }}>
+                      <span style={{ color: selectedIp === dev.ip ? "#e05a2b" : "#ccc", fontSize: "12px", fontWeight: "600" }}>{dev.name}</span>
+                      <span style={{ fontSize: "10px", color: "#555" }}>{dev.ip}</span>
+                    </div>
                   </div>
                 ))}
               </div>
             )}
-            {step !== "scan" && ips.length === 0 && (
+            {step !== "scan" && devices.length === 0 && (
               <div style={styles.emptyNote}>No devices found. Ensure receiver is active.</div>
             )}
           </section>
@@ -215,14 +227,14 @@ const SendPanel = ({ onNavigate }) => {
             {step !== "scan" && (
               <>
                 <div style={styles.fieldGroup}>
-                  <label style={styles.label}>TARGET IP</label>
+                  <label style={styles.label}>TARGET DEVICE</label>
                   <select
                     style={styles.select}
                     value={selectedIp}
                     onChange={e => setSelectedIp(e.target.value)}
                   >
                     <option value="">-- Select device --</option>
-                    {ips.map((ip, i) => <option key={i} value={ip}>{ip}</option>)}
+                    {devices.map((dev, i) => <option key={i} value={dev.ip}>{dev.name} — {dev.ip}</option>)}
                   </select>
                 </div>
                 <div style={styles.fieldGroup}>

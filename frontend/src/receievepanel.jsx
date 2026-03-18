@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 
 const ReceivePanel = ({ onNavigate }) => {
   const addon = window.addon;
@@ -8,38 +8,64 @@ const ReceivePanel = ({ onNavigate }) => {
   const [outputDir, setOutputDir] = useState("");
   const [isScanning, setIsScanning] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isDiscovering, setIsDiscovering] = useState(false);
   const [isTransferring, setIsTransferring] = useState(false);
   const [transferStatus, setTransferStatus] = useState(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [progress, setProgress] = useState(0);
-  const [ips, setIps] = useState([]);
+  const [devices, setDevices] = useState([]); // [{ ip, name }]
   const [log, setLog] = useState([]);
-  const [localIp, setLocalIp] = useState("");
+
+  // Parse "192.168.1.5 (DeviceName)" → { ip, name }
+  const parseDevice = (raw) => {
+    const match = raw.match(/^([\d.]+)\s*\((.+)\)$/);
+    if (match) return { ip: match[1], name: match[2] };
+    return { ip: raw.trim(), name: "Unknown" };
+  };
+
+  const isTransferringRef = useRef(false);
+  const keepAliveRef = useRef(null);
 
   const addLog = (msg) => {
     const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
     setLog(prev => [...prev.slice(-8), { ts, msg }]);
   };
 
-  React.useEffect(() => {
+  const startListener = () => {
     if (!addon) return;
     try {
       addon.startDiscoveryListener && addon.startDiscoveryListener();
-      addLog("Discovery listener started");
+      addLog("Discovery listener active");
     } catch (e) {
       console.error("Failed to start discovery listener:", e);
-      addLog("Failed to start discovery listener");
+      addLog("Discovery listener failed — retrying in 5s");
+      setTimeout(startListener, 5000);
     }
+  };
 
+  useEffect(() => {
+    if (!addon) return;
+
+    // Get local IP
     try {
-      const ip = addon.getLocalIP && addon.getLocalIP();
-      if (ip) setLocalIp(ip);
+      addon.getLocalIP && addon.getLocalIP();
     } catch (e) {
       console.error("Failed to get local IP:", e);
     }
+
+    // Start discovery listener on mount so this device is discoverable by senders
+    startListener();
+
+    return () => {
+      if (keepAliveRef.current) clearInterval(keepAliveRef.current);
+    };
   }, [addon]);
 
-  // FIX: handle both sync return and Promise-based electronAPI
+  // Keep ref in sync with state so interval can read it without stale closure
+  useEffect(() => {
+    isTransferringRef.current = isTransferring;
+  }, [isTransferring]);
+
   const handlePickOutputDir = async () => {
     if (!electronAPI) return;
     try {
@@ -55,20 +81,20 @@ const ReceivePanel = ({ onNavigate }) => {
     }
   };
 
-  // FIX: yield to React first so scanning UI renders before blocking native call
   const handleScan = async () => {
     if (!addon) return;
     setIsScanning(true);
-    setIps([]);
+    setDevices([]);
     addLog("Scanning network...");
     await new Promise(resolve => setTimeout(resolve, 50));
     try {
-      const scannedIps = addon.scanNetwork();
-      setIps(scannedIps || []);
-      addLog(`Network scan complete — ${scannedIps?.length || 0} device(s) found`);
+      const raw = addon.scanNetwork();
+      const parsed = (raw || []).map(parseDevice);
+      setDevices(parsed);
+      addLog(`Network scan complete — ${parsed.length} device(s) found`);
     } catch (err) {
       addLog("Network scan failed");
-      setIps([]);
+      setDevices([]);
     } finally {
       setIsScanning(false);
     }
@@ -76,6 +102,15 @@ const ReceivePanel = ({ onNavigate }) => {
 
   const handleReceive = async () => {
     if (!outputDir) return;
+
+    // Show discovery loading animation
+    setIsDiscovering(true);
+    addLog("Preparing to listen...");
+
+    // Brief pause so the user sees the discovery animation
+    await new Promise(resolve => setTimeout(resolve, 1200));
+    setIsDiscovering(false);
+
     setIsListening(true);
     setIsTransferring(true);
     setTransferStatus("waiting");
@@ -113,6 +148,11 @@ const ReceivePanel = ({ onNavigate }) => {
     } finally {
       setIsListening(false);
       setIsTransferring(false);
+      // Restart discovery listener after transfer so device is visible again
+      setTimeout(() => {
+        startListener();
+        addLog("Discovery listener restarted");
+      }, 500);
     }
   };
 
@@ -121,6 +161,8 @@ const ReceivePanel = ({ onNavigate }) => {
     setStatusMessage("");
     setProgress(0);
     setIsListening(false);
+    setIsDiscovering(false);
+    if (keepAliveRef.current) clearInterval(keepAliveRef.current);
     addLog("Session reset");
   };
 
@@ -130,6 +172,14 @@ const ReceivePanel = ({ onNavigate }) => {
         @keyframes scanPulse {
           0%, 100% { opacity: 0.15; transform: scale(0.8); }
           50% { opacity: 1; transform: scale(1.2); }
+        }
+        @keyframes radarSpin {
+          0% { transform: rotate(0deg); }
+          100% { transform: rotate(360deg); }
+        }
+        @keyframes fadeInUp {
+          0% { opacity: 0; transform: translateY(8px); }
+          100% { opacity: 1; transform: translateY(0); }
         }
       `}</style>
 
@@ -150,9 +200,8 @@ const ReceivePanel = ({ onNavigate }) => {
           <div>
             <div style={styles.headerLabel}>INBOUND TRANSFER</div>
             <h1 style={styles.headerTitle}>Receive Files</h1>
-            {/* Replace the localIp block with: */}
             <div style={{ marginTop: 6, fontFamily: MONO, fontSize: 11, color: "#555" }}>
-              DEVICE: <span style={{ color: "#e05a2b" }}>
+              DEVICE: <span style={{ color: "#2e7fd9" }}>
                 {localStorage.getItem("deviceName") || "—"}
               </span>
             </div>
@@ -198,8 +247,29 @@ const ReceivePanel = ({ onNavigate }) => {
                   <span style={styles.sectionTitle}>Receive Mode</span>
                 </div>
                 <p style={styles.sectionDesc}>
-                  Open a socket on port {DEFAULT_PORT} and await inbound connection from sender.
+                  Press the button below to start discovery and open a socket on port {DEFAULT_PORT} to receive files.
                 </p>
+
+                {/* Discovery loading indicator */}
+                {isDiscovering && (
+                  <div style={styles.discoveryBlock}>
+                    <div style={styles.radarContainer}>
+                      <div style={styles.radarOuter}>
+                        <div style={styles.radarInner}></div>
+                        <div style={styles.radarSweep}></div>
+                      </div>
+                    </div>
+                    <div style={styles.discoveryTextBlock}>
+                      <div style={styles.discoveryTitle}>INITIALIZING DISCOVERY</div>
+                      <div style={styles.discoverySubtext}>Broadcasting presence on local network...</div>
+                      <div style={styles.discoveryDots}>
+                        <span style={{...styles.dot, animationDelay: "0ms"}}></span>
+                        <span style={{...styles.dot, animationDelay: "200ms"}}></span>
+                        <span style={{...styles.dot, animationDelay: "400ms"}}></span>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {transferStatus && (
                   <div style={styles.progressBlock}>
@@ -235,12 +305,13 @@ const ReceivePanel = ({ onNavigate }) => {
                     style={{
                       ...styles.btnPrimary,
                       ...(isTransferring ? styles.btnListening : {}),
-                      ...(!outputDir || isTransferring ? styles.btnDisabled : {})
+                      ...(isDiscovering ? styles.btnListening : {}),
+                      ...(!outputDir || isTransferring || isDiscovering ? styles.btnDisabled : {})
                     }}
                     onClick={handleReceive}
-                    disabled={!outputDir || isTransferring}
+                    disabled={!outputDir || isTransferring || isDiscovering}
                   >
-                    {isTransferring ? "AWAITING TRANSFER..." : "START LISTENING"}
+                    {isDiscovering ? "DISCOVERING..." : isTransferring ? "AWAITING TRANSFER..." : "RECEIVE"}
                   </button>
                   {(transferStatus === "success" || transferStatus === "error") && (
                     <button style={styles.btnGhost} onClick={handleReset}>RESET</button>
@@ -278,12 +349,13 @@ const ReceivePanel = ({ onNavigate }) => {
                   </div>
                 )}
 
-                {!isScanning && ips.length > 0 && (
+                {!isScanning && devices.length > 0 && (
                   <div style={styles.ipList}>
-                    {ips.map((ip, i) => (
+                    {devices.map((dev, i) => (
                       <div key={i} style={styles.ipRow}>
                         <span style={styles.ipDot}></span>
-                        <span style={styles.ipText}>{ip}</span>
+                        <span style={{ ...styles.ipText, color: "#ccc", fontWeight: "600" }}>{dev.name}</span>
+                        <span style={{ ...styles.ipText, color: "#555", marginLeft: "8px" }}>{dev.ip}</span>
                       </div>
                     ))}
                   </div>
@@ -785,6 +857,77 @@ const styles = {
   statusValOn: { color: "#2e7fd9" },
   statusValSuccess: { color: "#3db06e" },
   statusValError: { color: "#c0392b" },
+
+  // Discovery loading styles
+  discoveryBlock: {
+    display: "flex",
+    alignItems: "center",
+    gap: "24px",
+    padding: "24px",
+    marginBottom: "24px",
+    backgroundColor: "#0f1a26",
+    border: "1px solid #1a3050",
+    borderRadius: "4px",
+    maxWidth: "420px",
+    animation: "fadeInUp 0.4s ease-out",
+  },
+  radarContainer: {
+    flexShrink: 0,
+  },
+  radarOuter: {
+    width: "48px",
+    height: "48px",
+    borderRadius: "50%",
+    border: "2px solid #1a3050",
+    position: "relative",
+    overflow: "hidden",
+    display: "flex",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  radarInner: {
+    width: "8px",
+    height: "8px",
+    borderRadius: "50%",
+    backgroundColor: "#2e7fd9",
+    boxShadow: "0 0 12px #2e7fd9aa",
+    zIndex: 2,
+  },
+  radarSweep: {
+    position: "absolute",
+    top: 0,
+    left: "50%",
+    width: "50%",
+    height: "50%",
+    transformOrigin: "bottom left",
+    background: "conic-gradient(from 0deg, transparent, #2e7fd944)",
+    animation: "radarSpin 1.5s linear infinite",
+    zIndex: 1,
+  },
+  discoveryTextBlock: {
+    display: "flex",
+    flexDirection: "column",
+    gap: "6px",
+  },
+  discoveryTitle: {
+    fontFamily: MONO,
+    fontSize: "11px",
+    letterSpacing: "3px",
+    color: "#2e7fd9",
+    fontWeight: "700",
+  },
+  discoverySubtext: {
+    fontFamily: MONO,
+    fontSize: "11px",
+    color: "#456",
+    letterSpacing: "0.5px",
+  },
+  discoveryDots: {
+    display: "flex",
+    gap: "5px",
+    alignItems: "center",
+    marginTop: "4px",
+  },
 };
 
 export default ReceivePanel;
