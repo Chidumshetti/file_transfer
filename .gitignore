@@ -3,6 +3,7 @@ Backend/build/*
 electron/node_modules/*
 addon/build/*
 addon/node_modules/*
-electron/nmap_output.txt
+electron/build/*
+electron/dist/*
 electron/wraperfunction.node
 Backend/bin/*

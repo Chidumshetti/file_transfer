@@ -150,11 +150,12 @@ const ReceivePanel = ({ onNavigate }) => {
           <div>
             <div style={styles.headerLabel}>INBOUND TRANSFER</div>
             <h1 style={styles.headerTitle}>Receive Files</h1>
-            {localIp && (
-              <div style={{ marginTop: 6, fontFamily: MONO, fontSize: 11, color: "#555" }}>
-                LOCAL IP: <span style={{ color: "#2e7fd9" }}>{localIp}</span>
-              </div>
-            )}
+            {/* Replace the localIp block with: */}
+            <div style={{ marginTop: 6, fontFamily: MONO, fontSize: 11, color: "#555" }}>
+              DEVICE: <span style={{ color: "#e05a2b" }}>
+                {localStorage.getItem("deviceName") || "—"}
+              </span>
+            </div>
           </div>
           <div style={styles.portBadge}>
             <span style={styles.portLabel}>PORT</span>

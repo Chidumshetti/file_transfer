@@ -1,7 +1,6 @@
 const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 
-// Disable all GPU & sandbox
 app.disableHardwareAcceleration();
 app.commandLine.appendSwitch("disable-gpu");
 app.commandLine.appendSwitch("disable-gpu-compositing");
@@ -20,12 +19,10 @@ function createWindow() {
     },
   });
 
-  // In dev you can still run React on 3000; for packaged app
-  // you can switch this to loadFile with the built index.html.
-  win.loadURL("http://localhost:3000");
+  // Load the built React app instead of dev server
+  win.loadFile(path.join(__dirname, "build", "index.html"));
 }
 
-// IPC handler used by renderer for directory picking
 ipcMain.handle("select-directory", async () => {
   const result = await dialog.showOpenDialog({
     properties: ["openDirectory"],

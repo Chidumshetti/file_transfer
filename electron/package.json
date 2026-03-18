@@ -1,12 +1,41 @@
 {
+  "name": "file-transfer",
+  "version": "1.0.0",
   "main": "main.js",
   "scripts": {
-    "start": "react-scripts start",
     "electron": "electron . --disable-gpu",
-    "build": "react-scripts build",
-    "electron-pack": "npm run build && electron ."
+    "dist": "electron-builder --win --x64"
+  },
+  "build": {
+    "appId": "com.filetransfer.app",
+    "productName": "FileTransfer",
+    "directories": {
+      "output": "dist"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "wraperfunction.node",
+      "config.json",
+      "build/**/*",
+      "node_modules/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "wraperfunction.node",
+        "to": "wraperfunction.node"
+      }
+    ],
+    "win": {
+      "target": "nsis"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
+    }
   },
   "devDependencies": {
-    "electron": "^29.4.6"
+    "electron": "^29.4.6",
+    "electron-builder": "^24.0.0"
   }
 }
