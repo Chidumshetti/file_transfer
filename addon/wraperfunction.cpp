@@ -79,12 +79,43 @@ Napi::Value StartDiscoveryListenerWrapped(const Napi::CallbackInfo& info) {
     return info.Env().Undefined();
 }
 
+// ---------------- CONFIG / DEVICE NAME ----------------
+
+// bool isDeviceNameSet()
+Napi::Boolean IsDeviceNameSetWrapped(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    bool set = is_device_name_set();
+    return Napi::Boolean::New(env, set);
+}
+
+// string getDeviceName()
+Napi::String GetDeviceNameWrapped(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    std::string name = get_device_name();
+    return Napi::String::New(env, name);
+}
+
+// void setDeviceName(string)
+Napi::Value SetDeviceNameWrapped(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsString()) {
+        Napi::TypeError::New(env, "Expected a string for device name").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    std::string name = info[0].As<Napi::String>().Utf8Value();
+    set_device_name(name);
+    return env.Undefined();
+}
+
 // Module initialization
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
     exports.Set("runTransfer",            Napi::Function::New(env, RunTransferWrapped));
     exports.Set("scanNetwork",            Napi::Function::New(env, ScanNetworkWrapped));
     exports.Set("getLocalIP",             Napi::Function::New(env, GetLocalIPWrapped));
     exports.Set("startDiscoveryListener", Napi::Function::New(env, StartDiscoveryListenerWrapped));
+    exports.Set("isDeviceNameSet",        Napi::Function::New(env, IsDeviceNameSetWrapped));
+    exports.Set("getDeviceName",          Napi::Function::New(env, GetDeviceNameWrapped));
+    exports.Set("setDeviceName",          Napi::Function::New(env, SetDeviceNameWrapped));
     return exports;
 }
 

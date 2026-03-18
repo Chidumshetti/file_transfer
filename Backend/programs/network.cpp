@@ -13,17 +13,47 @@ using namespace std;
 
 // ---------------- DEVICE NAME ----------------
 
-string get_device_name() {
-    ifstream file("config.json");
-    string default_name = "My-Device";
+// Try a couple of common relative locations so this works
+// from Backend binaries and from the Electron/addon process.
+static std::string resolve_config_path_for_read() {
+    const char* candidates[] = {
+        "../Backend/config/config.json", // from electron/addon
+        "../config/config.json",         // from Backend binary
+        "config/config.json",            // fallback
+        "config.json"                    // legacy
+    };
 
+    for (const char* p : candidates) {
+        ifstream f(p);
+        if (f.good()) return p;
+    }
+    // Default to first preferred path
+    return "../Backend/config/config.json";
+}
+
+static std::string resolve_config_path_for_write() {
+    // Prefer existing directories; otherwise fall back to local file.
+    const char* preferred = "../Backend/config/config.json";
+    {
+        ofstream test(preferred, std::ios::app);
+        if (test.is_open()) {
+            return preferred;
+        }
+    }
+    return "config.json";
+}
+
+string get_device_name() {
+    const string default_name = "My-Device";
+
+    const string path = resolve_config_path_for_read();
+    ifstream file(path);
     if (!file.is_open()) return default_name;
 
     string content((istreambuf_iterator<char>(file)),
-                    istreambuf_iterator<char>());
+                   istreambuf_iterator<char>());
 
     size_t pos = content.find("device_name");
-
     if (pos != string::npos) {
         size_t start = content.find(":", pos);
         size_t q1 = content.find("\"", start);
@@ -39,13 +69,27 @@ string get_device_name() {
 }
 
 void ensure_config_exists() {
-    ifstream file("../config/config.json");
+    const string path = resolve_config_path_for_write();
+    ifstream file(path);
+    if (file.good()) return;
 
-    if (!file.good()) {
-        ofstream out("config.json");
-        out << "{\n  \"device_name\": \"My-Device\"\n}";
-        out.close();
-    }
+    ofstream out(path);
+    if (!out.is_open()) return;
+    out << "{\n  \"device_name\": \"My-Device\"\n}";
+}
+
+bool is_device_name_set() {
+    ensure_config_exists();
+    string name = get_device_name();
+    return !name.empty() && name != "My-Device";
+}
+
+void set_device_name(const string& name) {
+    if (name.empty()) return;
+    const string path = resolve_config_path_for_write();
+    ofstream out(path);
+    if (!out.is_open()) return;
+    out << "{\n  \"device_name\": \"" << name << "\"\n}";
 }
 
 // ---------------- NETWORK IP ----------------

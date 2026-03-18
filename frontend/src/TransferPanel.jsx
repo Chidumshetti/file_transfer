@@ -16,6 +16,9 @@ const TransferPanel = () => {
   const [localIp, setLocalIp] = useState("");
   const [isTransferring, setIsTransferring] = useState(false);
   const [networkScanned, setNetworkScanned] = useState(false);
+  const [showNamePopup, setShowNamePopup] = useState(false);
+  const [deviceName, setDeviceName] = useState("");
+  const [nameError, setNameError] = useState("");
 
   useEffect(() => {
     if (!addon) {
@@ -35,8 +38,32 @@ const TransferPanel = () => {
       } catch (e) {
         console.error("Failed to get local IP:", e);
       }
+
+      try {
+        if (addon.isDeviceNameSet && !addon.isDeviceNameSet()) {
+          setShowNamePopup(true);
+        }
+      } catch (e) {
+        console.error("Failed to check device name:", e);
+      }
     }
   }, []);
+
+  const handleSaveName = () => {
+    if (!addon) return;
+    const trimmed = deviceName.trim();
+    if (!trimmed) {
+      setNameError("Please enter a device name.");
+      return;
+    }
+    try {
+      addon.setDeviceName(trimmed);
+      setShowNamePopup(false);
+      setNameError("");
+    } catch (e) {
+      setNameError(e.message || "Failed to save name.");
+    }
+  };
 
   const handlePickDirectory = async () => {
     if (!electronAPI) return;
@@ -184,6 +211,28 @@ const TransferPanel = () => {
           </>
         )}
       </div>
+
+      {showNamePopup && (
+        <div className="device-name-modal-backdrop">
+          <div className="device-name-modal">
+            <h3>Set Device Name</h3>
+            <p>This name will be shown to other devices on the network.</p>
+            <input
+              type="text"
+              value={deviceName}
+              onChange={(e) => {
+                setDeviceName(e.target.value);
+                if (nameError) setNameError("");
+              }}
+              placeholder="e.g. Office-PC or Laptop"
+            />
+            {nameError && <p className="error-text">{nameError}</p>}
+            <div className="modal-actions">
+              <button onClick={handleSaveName}>Save</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };

@@ -1,4 +1,4 @@
-const { app, BrowserWindow } = require("electron");
+const { app, BrowserWindow, ipcMain, dialog } = require("electron");
 const path = require("path");
 
 // Disable all GPU & sandbox
@@ -20,7 +20,27 @@ function createWindow() {
     },
   });
 
+  // In dev you can still run React on 3000; for packaged app
+  // you can switch this to loadFile with the built index.html.
   win.loadURL("http://localhost:3000");
 }
 
+// IPC handler used by renderer for directory picking
+ipcMain.handle("select-directory", async () => {
+  const result = await dialog.showOpenDialog({
+    properties: ["openDirectory"],
+  });
+
+  if (result.canceled || !result.filePaths || result.filePaths.length === 0) {
+    return null;
+  }
+  return result.filePaths[0];
+});
+
 app.whenReady().then(createWindow);
+
+app.on("window-all-closed", () => {
+  if (process.platform !== "darwin") {
+    app.quit();
+  }
+});

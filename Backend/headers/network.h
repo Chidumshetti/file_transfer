@@ -6,6 +6,8 @@
 // Device config
 std::string get_device_name();
 void ensure_config_exists();
+bool is_device_name_set();
+void set_device_name(const std::string& name);
 
 // Network info
 std::string get_network_ip();
