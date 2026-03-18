@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import './TransferPanel.css';
-import transferGif from './file.gif';
+import './css/TransferPanel.css';
+import transferGif from './assets/file.gif';
 
 const TransferPanel = () => {
   const addon = window.addon;
@@ -22,6 +22,19 @@ const TransferPanel = () => {
       console.error("❌ Native addon not found.");
     } else {
       console.log("✅ Native addon loaded:", addon);
+      try {
+        // Start UDP discovery listener so this device responds to scans
+        addon.startDiscoveryListener && addon.startDiscoveryListener();
+      } catch (e) {
+        console.error("Failed to start discovery listener:", e);
+      }
+
+      try {
+        const ip = addon.getLocalIP && addon.getLocalIP();
+        if (ip) setLocalIp(ip);
+      } catch (e) {
+        console.error("Failed to get local IP:", e);
+      }
     }
   }, []);
 
@@ -90,6 +103,9 @@ const TransferPanel = () => {
     <div className="transfer-container">
       <div className="panel-card">
         <h2>📁 File Transfer Tool</h2>
+        {localIp && (
+          <p><strong>Local IP:</strong> {localIp}</p>
+        )}
 
         <label>
           Mode:&nbsp;

@@ -3,18 +3,9 @@
 
 #include <string>
 #include <vector>
+#include <cstdint>
 
-#ifdef _WIN32
-#include <winsock2.h>
-using socket_t = SOCKET;
-#else
-using socket_t = int;
-#endif
-
-// Socket init and cleanup
-void init_sockets();
-void cleanup_sockets();
-void close_socket(socket_t s);
+#include "socket_utils.h"
 
 // Byte order conversions
 uint64_t htonll(uint64_t value);

@@ -11,27 +11,14 @@
 #include <cstdlib>
 #include <cstring>
 
+#include "../headers/socket_utils.h"
+
 #ifdef _WIN32
-#include <winsock2.h>
-#include <ws2tcpip.h>
-#include <windows.h>
-#pragma comment(lib, "ws2_32.lib")
-using socket_t = SOCKET;
-void init_sockets() { WSADATA wsaData; WSAStartup(MAKEWORD(2, 2), &wsaData); }
-void cleanup_sockets() { WSACleanup(); }
-void close_socket(socket_t s) { closesocket(s); }
+    #include <windows.h>
 #else
-#include <sys/types.h>
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#include <dirent.h>
-#include <sys/stat.h>
-using socket_t = int;
-void init_sockets() {}
-void cleanup_sockets() {}
-void close_socket(socket_t s) { close(s); }
+    #include <sys/types.h>
+    #include <dirent.h>
+    #include <sys/stat.h>
 #endif
 
 constexpr int BUFFER_SIZE = 64 * 1024;
@@ -82,6 +69,19 @@ void list_files(const std::string& base, const std::string& path, std::vector<st
 }
 
 // ------------- Utility -------------------
+
+uint64_t htonll(uint64_t value) {
+    uint32_t high_part = htonl(static_cast<uint32_t>(value >> 32));
+    uint32_t low_part  = htonl(static_cast<uint32_t>(value & 0xFFFFFFFFULL));
+    return (static_cast<uint64_t>(low_part) << 32) | high_part;
+}
+
+uint64_t ntohll(uint64_t value) {
+    uint32_t high_part = ntohl(static_cast<uint32_t>(value >> 32));
+    uint32_t low_part  = ntohl(static_cast<uint32_t>(value & 0xFFFFFFFFULL));
+    return (static_cast<uint64_t>(low_part) << 32) | high_part;
+}
+
 uint64_t get_file_size(const std::string& path) {
     std::ifstream ifs(path, std::ios::binary | std::ios::ate);
     return ifs ? (uint64_t)ifs.tellg() : 0;

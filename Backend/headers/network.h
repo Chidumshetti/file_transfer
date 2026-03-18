@@ -1,19 +1,16 @@
-#define _WIN32_WINNT 0x0600 
-#include <iostream>
+#pragma once
+
 #include <string>
-#include <winsock2.h>
-#include <ws2tcpip.h> 
-#include <sstream>  
-#include <fstream>  
 #include <vector>
-#include <regex>    
-#include <cstdlib>
-#include <cstdio>
 
-#pragma comment(lib, "ws2_32.lib")
+// Device config
+std::string get_device_name();
+void ensure_config_exists();
 
-using namespace std;
+// Network info
+std::string get_network_ip();
+std::string get_subnet(const std::string& ip);
 
-string get_network_ip();
-string get_subnet(const string& ip);
-std::vector<std::string> scan_network(const string& subnet, const string& local_ip);
+// UDP discovery
+std::vector<std::string> discover_devices();
+void start_discovery_listener();

@@ -20,21 +20,21 @@ int main() {
     cout << "Subnet for scanning: " << subnet << endl;
 
     // 🟢 STORE returned IPs
-    std::vector<std::string> ips = scan_network(subnet, local_ip);
+   // std::vector<std::string> ips = scan_network(subnet, local_ip);
 
-    // 🟢 PRINT the scanned IPs
-    std::cout << "\nDiscovered Devices:\n";
-    for (const std::string& ip : ips) {
-        std::cout << " - " << ip << std::endl;
-    }
+    // // 🟢 PRINT the scanned IPs
+    // std::cout << "\nDiscovered Devices:\n";
+    // for (const std::string& ip : ips) {
+    //     std::cout << " - " << ip << std::endl;
+    // }
 
-    string dir_path;
+    // string dir_path;
   
-    cout << "\nEnter target IP for file transfer: ";
-    string target_ip;
-    cin >> target_ip;
+    // cout << "\nEnter target IP for file transfer: ";
+    // string target_ip;
+    // cin >> target_ip;
 
-    string network_path = "\\\\" + target_ip + "\\D:\\";
+    // string network_path = "\\\\" + target_ip + "\\D:\\";
     // You can now call run_transfer as needed here, e.g.:
     // int result = run_transfer("send", target_ip, "12345", dir_path);
     cout << "\nOperations complete!\n";

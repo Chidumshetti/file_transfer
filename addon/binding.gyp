@@ -6,23 +6,27 @@
         "./wraperfunction.cpp",
         "../Backend/programs/network.cpp",
         "../Backend/programs/Send_recieve.cpp",
+        "../Backend/programs/socket_utils.cpp"
       ],
       "include_dirs": [
-        "<!(node -p \"require('node-addon-api').include\")",
-        "../backend/headers"
+        "<!@(node -p \"require('node-addon-api').include\")",
+        "../Backend/headers"
       ],
-      "dependencies": [
-        "<!(node -p \"require('node-addon-api').gyp\")"
+      "defines": [
+        "NAPI_CPP_EXCEPTIONS",
+        "_WINSOCK_DEPRECATED_NO_WARNINGS"
       ],
       "cflags_cc!": [ "-fno-exceptions" ],
-      "defines": [ "NAPI_CPP_EXCEPTIONS" ],
       "msvs_settings": {
         "VCCLCompilerTool": {
           "ExceptionHandling": 1
         }
-      }
+      },
+      "conditions": [
+        ["OS=='win'", {
+          "libraries": [ "ws2_32.lib" ]
+        }]
+      ]
     }
   ]
 }
-
-

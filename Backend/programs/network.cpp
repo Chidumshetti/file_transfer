@@ -1,33 +1,80 @@
 #include "../headers/network.h"
 
+#include <iostream>
+#include <fstream>
+#include <regex>
+#include <vector>
+#include <thread>
+
+#include "../headers/socket_utils.h"
+
+using namespace std;
+
+
+// ---------------- DEVICE NAME ----------------
+
+string get_device_name() {
+    ifstream file("config.json");
+    string default_name = "My-Device";
+
+    if (!file.is_open()) return default_name;
+
+    string content((istreambuf_iterator<char>(file)),
+                    istreambuf_iterator<char>());
+
+    size_t pos = content.find("device_name");
+
+    if (pos != string::npos) {
+        size_t start = content.find(":", pos);
+        size_t q1 = content.find("\"", start);
+        size_t q2 = content.find("\"", q1 + 1);
+
+        if (q1 != string::npos && q2 != string::npos) {
+            string name = content.substr(q1 + 1, q2 - q1 - 1);
+            if (!name.empty()) return name;
+        }
+    }
+
+    return default_name;
+}
+
+void ensure_config_exists() {
+    ifstream file("../config/config.json");
+
+    if (!file.good()) {
+        ofstream out("config.json");
+        out << "{\n  \"device_name\": \"My-Device\"\n}";
+        out.close();
+    }
+}
+
+// ---------------- NETWORK IP ----------------
+
 string get_network_ip() {
     try {
-        WSADATA wsaData;
-        if (WSAStartup(MAKEWORD(2, 2), &wsaData) != 0) {
-            throw runtime_error("WSAStartup failed!");
-        }
+        init_sockets();
 
         char hostname[256];
-        if (gethostname(hostname, sizeof(hostname)) == SOCKET_ERROR) {
-            WSACleanup();
+        if (gethostname(hostname, sizeof(hostname)) == -1) {
             throw runtime_error("Error getting hostname");
         }
 
         struct addrinfo hints{}, *res;
-        hints.ai_family = AF_INET;  // IPv4
+        hints.ai_family = AF_INET;
 
         if (getaddrinfo(hostname, NULL, &hints, &res) != 0) {
-            WSACleanup();
             throw runtime_error("Error getting IP address");
         }
 
         struct sockaddr_in* addr = (struct sockaddr_in*)res->ai_addr;
-        string ip = inet_ntoa(addr->sin_addr);  // Replacing inet_ntop()
+
+        char ip[INET_ADDRSTRLEN];
+        inet_ntop(AF_INET, &(addr->sin_addr), ip, sizeof(ip));
 
         freeaddrinfo(res);
-        WSACleanup();
+        cleanup_sockets();
 
-        return ip;
+        return string(ip);
     } 
     catch (const exception& e) {
         cerr << "Exception: " << e.what() << endl;
@@ -35,48 +82,126 @@ string get_network_ip() {
     }
 }
 
-// Function to convert IP into a subnet for scanning
+// ---------------- SUBNET ----------------
+
 string get_subnet(const string& ip) {
     size_t last_dot = ip.find_last_of('.');
-    if (last_dot == string::npos) {
-        return "";
-    }
-    return ip.substr(0, last_dot) + ".0/24";  // Convert to CIDR format (e.g., 192.168.1.0/24)
+    if (last_dot == string::npos) return "";
+    return ip.substr(0, last_dot) + ".0/24";
 }
 
-std::vector<std::string> scan_network(const string& subnet, const string& local_ip) {
-    std::vector<std::string> connected_devices;
+// ---------------- UDP DISCOVERY (SENDER) ----------------
 
-    if (subnet.empty()) {
-        connected_devices.push_back("Invalid subnet or not connected to a network");
-        return connected_devices;
+vector<string> discover_devices() {
+    vector<string> devices;
+
+    init_sockets();
+
+    socket_t sock = socket(AF_INET, SOCK_DGRAM, 0);
+    if (sock == INVALID_SOCKET) return devices;
+
+    int broadcast = 1;
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST,
+               (char*)&broadcast, sizeof(broadcast));
+
+    sockaddr_in addr{};
+    addr.sin_family = AF_INET;
+    addr.sin_port = htons(8888);
+    inet_pton(AF_INET, "255.255.255.255", &addr.sin_addr);
+
+    string msg = "DISCOVER_APP";
+
+    sendto(sock, msg.c_str(), msg.size(), 0,
+           (sockaddr*)&addr, sizeof(addr));
+
+    char buffer[1024];
+    sockaddr_in sender{};
+    socklen_t sender_len = sizeof(sender);
+
+    fd_set fds;
+
+    while (true) {
+        FD_ZERO(&fds);
+        FD_SET(sock, &fds);
+
+        timeval tv{};
+        tv.tv_sec = 3;
+
+        int activity = select(sock + 1, &fds, NULL, NULL, &tv);
+        if (activity <= 0) break;
+
+        int len = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
+                           (sockaddr*)&sender, &sender_len);
+
+        if (len > 0) {
+            buffer[len] = '\0';
+            string msg(buffer);
+
+            char ip[INET_ADDRSTRLEN];
+            inet_ntop(AF_INET, &sender.sin_addr, ip, sizeof(ip));
+
+            string device_name = "Unknown";
+            size_t pos = msg.find(":");
+            if (pos != string::npos) {
+                device_name = msg.substr(pos + 1);
+            }
+
+            devices.push_back(string(ip) + " (" + device_name + ")");
+        }
     }
 
-    string command = "nmap -sn " + subnet + " > nmap_output.txt";
-    system(command.c_str());
+    close_socket(sock);
+    cleanup_sockets();
 
-    string line, ip, mac, device;
-    bool found_ip = false;
-
-    ifstream infile("nmap_output.txt");
-    while (getline(infile, line)) {
-        smatch match;
-        if (regex_search(line, match, regex(R"(Nmap scan report for (\d+\.\d+\.\d+\.\d+))"))) {
-            ip = match[1].str();
-            found_ip = true;
-            mac = "Unknown";
-            device = "Unknown";
-        }
-        else if (found_ip && regex_search(line, match, regex(R"(MAC Address: ([0-9A-Fa-f:]+) \((.*?)\))"))) {
-            mac = match[1].str();
-            device = match[2].str();
-        }
-
-        if (found_ip) {
-            connected_devices.push_back(ip + " (" + device + ")");
-            found_ip = false;
-        }
+    if (devices.empty()) {
+        devices.push_back("No active app instances found");
     }
-    infile.close();
-    return connected_devices;
+
+    return devices;
+}
+
+// ---------------- UDP LISTENER (RECEIVER) ----------------
+
+void start_discovery_listener() {
+    thread([]() {
+        init_sockets();
+
+        socket_t sock = socket(AF_INET, SOCK_DGRAM, 0);
+
+        int broadcast = 1;
+        setsockopt(sock, SOL_SOCKET, SO_BROADCAST,
+                   (char*)&broadcast, sizeof(broadcast));
+
+        sockaddr_in addr{};
+        addr.sin_family = AF_INET;
+        addr.sin_port = htons(8888);
+        addr.sin_addr.s_addr = INADDR_ANY;
+
+        bind(sock, (sockaddr*)&addr, sizeof(addr));
+
+        char buffer[1024];
+
+        while (true) {
+            sockaddr_in sender{};
+            socklen_t sender_len = sizeof(sender);
+
+            int len = recvfrom(sock, buffer, sizeof(buffer) - 1, 0,
+                               (sockaddr*)&sender, &sender_len);
+
+            if (len > 0) {
+                buffer[len] = '\0';
+
+                if (string(buffer) == "DISCOVER_APP") {
+                    string device_name = get_device_name();
+                    string response = "APP_HERE:" + device_name;
+
+                    sendto(sock, response.c_str(), response.size(), 0,
+                           (sockaddr*)&sender, sender_len);
+                }
+            }
+        }
+
+        close_socket(sock);
+        cleanup_sockets();
+    }).detach();
 }
