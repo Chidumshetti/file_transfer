@@ -23,9 +23,13 @@
         }
       },
       "conditions": [
-        ["OS=='win'", {
-          "libraries": [ "ws2_32.lib" ]
-        }]
+             ["OS=='win'", {
+        "libraries": [ "-lws2_32", "-liphlpapi" ]
+      }],
+      ["OS=='linux'", {
+        "libraries": [],
+        "cflags": [ "-std=c++17" ]
+      }]
       ]
     }
   ]

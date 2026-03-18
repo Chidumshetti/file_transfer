@@ -1,16 +1,30 @@
 #include "../headers/network.h"
 #include "../headers/socket_utils.h"
 
-#ifdef _WIN32
-  #include <iphlpapi.h>
-  #pragma comment(lib, "iphlpapi.lib")
-#endif
+// At the very top of network.h, before anything else
 
-#include <iostream>
-#include <fstream>
-#include <regex>
-#include <vector>
-#include <thread>
+#ifdef _WIN32
+  #include <winsock2.h>
+  #include <ws2tcpip.h>
+  #include <iphlpapi.h>
+  #pragma comment(lib, "ws2_32.lib")
+  #pragma comment(lib, "iphlpapi.lib")
+#else
+  #include <sys/socket.h>
+  #include <sys/types.h>
+  #include <netinet/in.h>
+  #include <arpa/inet.h>
+  #include <netdb.h>
+  #include <ifaddrs.h>      // ✅ move it here — top level, NOT inside function
+  #include <unistd.h>
+  #include <net/if.h>
+  #include <cerrno>
+
+  #define INVALID_SOCKET  (-1)
+  #define SOCKET_ERROR    (-1)
+  typedef int socket_t;
+  #define closesocket     close
+#endif
 
 using namespace std;
 
