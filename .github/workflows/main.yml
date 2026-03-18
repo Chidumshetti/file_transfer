@@ -1,0 +1,168 @@
+name: Build & Release
+
+on:
+  push:
+    branches: [ "chida/major_update" ]
+    tags:
+      - "v*"                          # triggers GitHub Release
+  pull_request:
+    branches: [ "chida/major_update" ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-20.04
+            platform: linux
+            artifact_name: linux-ubuntu20
+
+          - os: ubuntu-22.04
+            platform: linux
+            artifact_name: linux-ubuntu22
+
+          - os: ubuntu-24.04
+            platform: linux
+            artifact_name: linux-ubuntu24
+
+          - os: windows-latest
+            platform: windows
+            artifact_name: windows-x64
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # ── 1. Checkout ──────────────────────────────────────────────────────
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # ── 2. Setup Node.js ─────────────────────────────────────────────────
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          # cache removed — no package-lock.json in repo
+          # to re-enable: commit package-lock.json files and add cache: 'npm'
+
+      # ── 3. OS-level build deps ───────────────────────────────────────────
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            python3 \
+            libusb-1.0-0-dev \
+            libudev-dev \
+            upx-ucl
+
+      - name: Install Windows build dependencies
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: npm install --global node-gyp
+
+      # ════════════════════════════════════════════════════════════════════
+      # STEP A : addon — npm i → node-gyp configure → node-gyp build
+      # ════════════════════════════════════════════════════════════════════
+      - name: addon — npm install
+        working-directory: addon
+        run: npm i
+
+      - name: addon — node-gyp configure
+        working-directory: addon
+        run: npx node-gyp configure
+
+      - name: addon — node-gyp build
+        working-directory: addon
+        run: npx node-gyp build
+
+      # cp ./build/Release/wraperfunction.node ../electron/wraperfunction.node
+      - name: Copy wraperfunction.node → electron/ (Linux)
+        if: matrix.platform == 'linux'
+        run: cp addon/build/Release/wraperfunction.node electron/wraperfunction.node
+
+      - name: Copy wraperfunction.node → electron/ (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: Copy-Item addon\build\Release\wraperfunction.node electron\wraperfunction.node
+
+      # ════════════════════════════════════════════════════════════════════
+      # STEP B : frontend — npm i → npm run build
+      # ════════════════════════════════════════════════════════════════════
+      - name: frontend — npm install
+        working-directory: frontend
+        run: npm i
+
+      - name: frontend — npm run build
+        working-directory: frontend
+        run: npm run build
+        env:
+          NODE_ENV: production
+          GENERATE_SOURCEMAP: false     # skips sourcemaps → smaller bundle
+
+      # cp ./build/ ../electron/build  (matches your "build/**/*" in package.json)
+      - name: Copy React build → electron/build (Linux)
+        if: matrix.platform == 'linux'
+        run: |
+          rm -rf electron/build
+          cp -r frontend/build electron/build
+
+      - name: Copy React build → electron/build (Windows)
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          if (Test-Path electron\build) { Remove-Item -Recurse -Force electron\build }
+          Copy-Item -Recurse frontend\build electron\build
+
+      # ════════════════════════════════════════════════════════════════════
+      # STEP C : electron — npm i → electron-builder
+      # ════════════════════════════════════════════════════════════════════
+      - name: electron — npm install
+        working-directory: electron
+        run: npm i
+
+      # Windows: uses "dist" script from your package.json (--win --x64)
+      - name: electron — build Windows
+        if: matrix.platform == 'windows'
+        working-directory: electron
+        run: npm run dist
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_ENV: production
+
+      # Linux: override to --linux --x64 since your package.json only has --win
+      - name: electron — build Linux
+        if: matrix.platform == 'linux'
+        working-directory: electron
+        run: npx electron-builder --linux --x64
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          NODE_ENV: production
+
+      # ── Upload artifact (every push) ─────────────────────────────────────
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.artifact_name }}
+          path: |
+            electron/dist/*.exe
+            electron/dist/*.AppImage
+            electron/dist/*.deb
+            electron/dist/latest*.yml
+          if-no-files-found: warn
+          retention-days: 7
+
+      # ── Upload to GitHub Release (only on v* tag push) ───────────────────
+      - name: Upload to GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            electron/dist/*.exe
+            electron/dist/*.AppImage
+            electron/dist/*.deb
+            electron/dist/latest*.yml
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
