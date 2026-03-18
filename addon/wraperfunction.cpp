@@ -1,31 +1,35 @@
 // File: addon.cpp
 
-#include "E:/FTP/file_transfer/addon/node_modules/node-addon-api/napi.h"
+#include <napi.h>
 #include <string>
 #include <vector>
-#include "../backend/headers/network.h"
-#include "../backend/headers/Send_recieve.h"
+#include <iostream>  
+#include "../Backend/headers/network.h"
+#include "../Backend/headers/Send_recieve.h"
+#include <iostream>   // std::cout, std::cerr
+#include <fstream>    // std::ifstream, std::ofstream
+#include <thread>     // std::thread
+#include <vector>
+#include <string>
+#include <regex>
 
 // Declaration of C++ core function
 int run_transfer(const std::string& mode, const std::string& ip_or_port, const std::string& port_or_outputdir, const std::string& directory = "") {
     if (mode == "receive") {
-        int port = std::atoi(ip_or_port.c_str()); // ip_or_port is port in this mode
+        int port = std::atoi(ip_or_port.c_str());
         const std::string& output_dir = port_or_outputdir;
         return receive_directory(port, output_dir) ? 0 : 1;
     } 
     else if (mode == "send") {
-        // ip_or_port = IP address
-        // port_or_outputdir = port (string)
-        // directory = directory path to send
         int port = std::atoi(port_or_outputdir.c_str());
         return send_directory(directory, ip_or_port, port) ? 0 : 1;
-
     } 
     else {
         std::cerr << "Invalid mode: " << mode << "\n";
         return 1;
     }
 }
+
 // Wrapping run_transfer for Node.js
 Napi::Number RunTransferWrapped(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
@@ -36,9 +40,9 @@ Napi::Number RunTransferWrapped(const Napi::CallbackInfo& info) {
         return Napi::Number::New(env, -1);
     }
 
-    std::string mode = info[0].As<Napi::String>();
-    std::string ip_or_port = info[1].As<Napi::String>();
-    std::string port_or_outputdir = info[2].As<Napi::String>();
+    std::string mode     = info[0].As<Napi::String>().Utf8Value();
+    std::string ip_or_port       = info[1].As<Napi::String>().Utf8Value();
+    std::string port_or_outputdir = info[2].As<Napi::String>().Utf8Value();
     std::string directory = (info.Length() >= 4 && info[3].IsString())
                             ? info[3].As<Napi::String>().Utf8Value()
                             : "";
@@ -47,21 +51,21 @@ Napi::Number RunTransferWrapped(const Napi::CallbackInfo& info) {
     return Napi::Number::New(env, result);
 }
 
-// Wrapping scan_network
+// Wrapping discover_devices — replaces old scan_network wrapper.
+// Returns an array of strings like "192.168.1.5 (DeviceName)".
 Napi::Array ScanNetworkWrapped(const Napi::CallbackInfo& info) {
     Napi::Env env = info.Env();
 
-    std::string local_ip = get_network_ip();
-    if (local_ip.empty()) {
-        return Napi::Array::New(env); // Return empty array on failure
+    std::vector<std::string> devices = discover_devices();
+
+    // If the only entry is the "no devices" sentinel, return empty array
+    if (devices.size() == 1 && devices[0] == "No active app instances found") {
+        return Napi::Array::New(env, 0);
     }
 
-    std::string subnet = get_subnet(local_ip);
-    std::vector<std::string> ips = scan_network(subnet, local_ip);
-
-    Napi::Array result = Napi::Array::New(env, ips.size());
-    for (size_t i = 0; i < ips.size(); ++i) {
-        result[i] = Napi::String::New(env, ips[i]);
+    Napi::Array result = Napi::Array::New(env, devices.size());
+    for (size_t i = 0; i < devices.size(); ++i) {
+        result[i] = Napi::String::New(env, devices[i]);
     }
 
     return result;
@@ -74,11 +78,50 @@ Napi::String GetLocalIPWrapped(const Napi::CallbackInfo& info) {
     return Napi::String::New(env, ip);
 }
 
+// Wrapping start_discovery_listener
+// Call once at app startup so this device responds to DISCOVER_APP broadcasts.
+Napi::Value StartDiscoveryListenerWrapped(const Napi::CallbackInfo& info) {
+    start_discovery_listener();
+    return info.Env().Undefined();
+}
+
+// ---------------- CONFIG / DEVICE NAME ----------------
+
+// bool isDeviceNameSet()
+Napi::Boolean IsDeviceNameSetWrapped(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    bool set = is_device_name_set();
+    return Napi::Boolean::New(env, set);
+}
+
+// string getDeviceName()
+Napi::String GetDeviceNameWrapped(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    std::string name = get_device_name();
+    return Napi::String::New(env, name);
+}
+
+// void setDeviceName(string)
+Napi::Value SetDeviceNameWrapped(const Napi::CallbackInfo& info) {
+    Napi::Env env = info.Env();
+    if (info.Length() < 1 || !info[0].IsString()) {
+        Napi::TypeError::New(env, "Expected a string for device name").ThrowAsJavaScriptException();
+        return env.Undefined();
+    }
+    std::string name = info[0].As<Napi::String>().Utf8Value();
+    set_device_name(name);
+    return env.Undefined();
+}
+
 // Module initialization
 Napi::Object Init(Napi::Env env, Napi::Object exports) {
-    exports.Set("runTransfer", Napi::Function::New(env, RunTransferWrapped));
-    exports.Set("scanNetwork", Napi::Function::New(env, ScanNetworkWrapped));
-    exports.Set("getLocalIP", Napi::Function::New(env, GetLocalIPWrapped));
+    exports.Set("runTransfer",            Napi::Function::New(env, RunTransferWrapped));
+    exports.Set("scanNetwork",            Napi::Function::New(env, ScanNetworkWrapped));
+    exports.Set("getLocalIP",             Napi::Function::New(env, GetLocalIPWrapped));
+    exports.Set("startDiscoveryListener", Napi::Function::New(env, StartDiscoveryListenerWrapped));
+    exports.Set("isDeviceNameSet",        Napi::Function::New(env, IsDeviceNameSetWrapped));
+    exports.Set("getDeviceName",          Napi::Function::New(env, GetDeviceNameWrapped));
+    exports.Set("setDeviceName",          Napi::Function::New(env, SetDeviceNameWrapped));
     return exports;
 }
 

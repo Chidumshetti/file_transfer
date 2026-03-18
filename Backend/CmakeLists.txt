@@ -6,12 +6,22 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_SOURCE_DIR}/bin)
 include_directories(${CMAKE_SOURCE_DIR}/headers)
 include_directories(${CMAKE_SOURCE_DIR}/programs)
 
-add_library(network_lib programs/network.cpp)
+# Libraries
+add_library(network_lib 
+        programs/network.cpp
+        programs/socket_utils.cpp)
 add_library(transfer_lib programs/Send_recieve.cpp)
 
-#add_executable(network programs/network.cpp)
-#add_executable(tcptrasfer programs/Send_recieve.cpp)
-#add_executable(filetransfer main.cpp programs/network.cpp programs/zipper.cpp programs/tcptransfer.cpp) 
+# Link Winsock on Windows for any socket users
+if (WIN32)
+    target_link_libraries(network_lib ws2_32)
+    target_link_libraries(transfer_lib ws2_32)
+endif()
 
+# ---------------- MAIN APP ----------------
 add_executable(file_transfer main.cpp)
 target_link_libraries(file_transfer network_lib transfer_lib)
+
+# ---------------- TEST APP ----------------
+add_executable(network_test unit_test/networktest.cpp)
+target_link_libraries(network_test network_lib transfer_lib)
