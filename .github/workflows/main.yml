@@ -43,7 +43,8 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
-          cache: 'npm'
+          # cache removed — no package-lock.json in repo
+          # to re-enable: commit package-lock.json files and add cache: 'npm'
 
       # ── 3. OS-level build deps ───────────────────────────────────────────
       - name: Install Linux build dependencies
