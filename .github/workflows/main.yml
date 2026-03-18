@@ -15,9 +15,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-20.04
-            platform: linux
-            artifact_name: linux-ubuntu20
 
           - os: ubuntu-22.04
             platform: linux
@@ -100,7 +97,8 @@ jobs:
         run: npm run build
         env:
           NODE_ENV: production
-          GENERATE_SOURCEMAP: false     # skips sourcemaps → smaller bundle
+          GENERATE_SOURCEMAP: false
+          CI: false # skips sourcemaps → smaller bundle
 
       # cp ./build/ ../electron/build  (matches your "build/**/*" in package.json)
       - name: Copy React build → electron/build (Linux)
