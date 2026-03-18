@@ -2,6 +2,12 @@
 #include "../headers/socket_utils.h"
 
 // At the very top of network.h, before anything else
+#include <iostream>   // std::cout, std::cerr
+#include <fstream>    // std::ifstream, std::ofstream
+#include <thread>     // std::thread
+#include <vector>
+#include <string>
+#include <regex>
 
 #ifdef _WIN32
   #include <winsock2.h>

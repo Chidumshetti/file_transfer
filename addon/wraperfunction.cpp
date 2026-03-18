@@ -6,6 +6,12 @@
 #include <iostream>  
 #include "../Backend/headers/network.h"
 #include "../Backend/headers/Send_recieve.h"
+#include <iostream>   // std::cout, std::cerr
+#include <fstream>    // std::ifstream, std::ofstream
+#include <thread>     // std::thread
+#include <vector>
+#include <string>
+#include <regex>
 
 // Declaration of C++ core function
 int run_transfer(const std::string& mode, const std::string& ip_or_port, const std::string& port_or_outputdir, const std::string& directory = "") {
