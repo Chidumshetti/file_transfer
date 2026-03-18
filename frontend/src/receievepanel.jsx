@@ -13,10 +13,9 @@ const ReceivePanel = ({ onNavigate }) => {
   const [transferStatus, setTransferStatus] = useState(null);
   const [statusMessage, setStatusMessage] = useState("");
   const [progress, setProgress] = useState(0);
-  const [devices, setDevices] = useState([]); // [{ ip, name }]
+  const [devices, setDevices] = useState([]);
   const [log, setLog] = useState([]);
 
-  // Parse "192.168.1.5 (DeviceName)" → { ip, name }
   const parseDevice = (raw) => {
     const match = raw.match(/^([\d.]+)\s*\((.+)\)$/);
     if (match) return { ip: match[1], name: match[2] };
@@ -25,16 +24,29 @@ const ReceivePanel = ({ onNavigate }) => {
 
   const isTransferringRef = useRef(false);
   const keepAliveRef = useRef(null);
+  const discoveryActiveRef = useRef(false);
 
   const addLog = (msg) => {
     const ts = new Date().toLocaleTimeString("en-US", { hour12: false });
     setLog(prev => [...prev.slice(-8), { ts, msg }]);
   };
 
+  const stopDiscoveryListener = () => {
+    if (!addon || !discoveryActiveRef.current) return;
+    try {
+      addon.stopDiscoveryListener && addon.stopDiscoveryListener();
+      discoveryActiveRef.current = false;
+      addLog("Discovery listener stopped");
+    } catch (e) {
+      console.error("Failed to stop discovery listener:", e);
+    }
+  };
+
   const startListener = () => {
     if (!addon) return;
     try {
       addon.startDiscoveryListener && addon.startDiscoveryListener();
+      discoveryActiveRef.current = true;
       addLog("Discovery listener active");
     } catch (e) {
       console.error("Failed to start discovery listener:", e);
@@ -45,38 +57,27 @@ const ReceivePanel = ({ onNavigate }) => {
 
   useEffect(() => {
     if (!addon) return;
-
-    // Get local IP
-    try {
-      addon.getLocalIP && addon.getLocalIP();
-    } catch (e) {
-      console.error("Failed to get local IP:", e);
-    }
-
-    // Start discovery listener on mount so this device is discoverable by senders
+    try { addon.getLocalIP && addon.getLocalIP(); } catch (e) {}
     startListener();
-
     return () => {
       if (keepAliveRef.current) clearInterval(keepAliveRef.current);
     };
   }, [addon]);
 
-  // Keep ref in sync with state so interval can read it without stale closure
   useEffect(() => {
     isTransferringRef.current = isTransferring;
   }, [isTransferring]);
 
+  // ── Pick output directory ─────────────────────────────────────────────────
   const handlePickOutputDir = async () => {
     if (!electronAPI) return;
     try {
-      const result = electronAPI.selectDirectory();
-      const selected = result instanceof Promise ? await result : result;
+      const selected = await electronAPI.selectDirectory();
       if (selected) {
         setOutputDir(selected);
         addLog(`Output directory set: ${selected}`);
       }
     } catch (err) {
-      console.error("Directory selection failed:", err);
       addLog("Directory selection failed");
     }
   };
@@ -100,14 +101,15 @@ const ReceivePanel = ({ onNavigate }) => {
     }
   };
 
+  // ── Receive ───────────────────────────────────────────────────────────────
   const handleReceive = async () => {
     if (!outputDir) return;
 
-    // Show discovery loading animation
+    // Stop discovery so port is free
+    stopDiscoveryListener();
+
     setIsDiscovering(true);
     addLog("Preparing to listen...");
-
-    // Brief pause so the user sees the discovery animation
     await new Promise(resolve => setTimeout(resolve, 1200));
     setIsDiscovering(false);
 
@@ -118,29 +120,63 @@ const ReceivePanel = ({ onNavigate }) => {
     setProgress(0);
     addLog(`Listening on port ${DEFAULT_PORT}`);
 
-    let prog = 0;
-    const interval = setInterval(() => {
-      prog += Math.random() * 10;
-      if (prog >= 90) { prog = 90; clearInterval(interval); }
-      setProgress(Math.round(prog));
-    }, 400);
+    // Subscribe to live progress events from main process stdout intercept
+    if (electronAPI?.onTransferProgress) {
+      electronAPI.onTransferProgress((data) => {
+        if (typeof data.progress === "number") {
+          setProgress(data.progress);
+          if (data.progress > 0 && data.progress < 100) {
+            setStatusMessage(`Receiving... ${data.progress}%`);
+            addLog(`Progress: ${data.progress}%`);
+          }
+        }
+        if (data.done) {
+          setProgress(100);
+          setTransferStatus("success");
+          setStatusMessage("Files received successfully.");
+          setIsListening(false);
+          setIsTransferring(false);
+          addLog("Transfer complete — files written to disk");
+          electronAPI.removeTransferProgressListener?.();
+          setTimeout(() => { startListener(); addLog("Discovery listener restarted"); }, 500);
+        }
+        if (data.error) {
+          setTransferStatus("error");
+          setStatusMessage("Receive failed. Transmission error.");
+          setIsListening(false);
+          setIsTransferring(false);
+          addLog("Transfer failed");
+          electronAPI.removeTransferProgressListener?.();
+          setTimeout(() => { startListener(); addLog("Discovery listener restarted"); }, 500);
+        }
+      });
+    }
+
+    // Defer blocking call so React flushes UI first
+    await new Promise(resolve => setTimeout(resolve, 80));
 
     try {
       const res = await new Promise((resolve, reject) => {
-        try {
-          const result = addon.runTransfer("receive", DEFAULT_PORT, outputDir, "");
-          resolve(result);
-        } catch (err) { reject(err); }
+        setTimeout(() => {
+          try {
+            const result = addon.runTransfer("receive", DEFAULT_PORT, outputDir, "");
+            resolve(result);
+          } catch (err) { reject(err); }
+        }, 0);
       });
 
-      clearInterval(interval);
-      setProgress(100);
-      const ok = res === 0;
-      setTransferStatus(ok ? "success" : "error");
-      setStatusMessage(ok ? "Files received successfully." : "Receive failed. Transmission error.");
-      addLog(ok ? "Transfer complete — files written to disk" : "Transfer failed");
+      electronAPI?.removeTransferProgressListener?.();
+
+      // Only update if IPC events haven't already resolved it
+      if (transferStatus === "waiting" || transferStatus === null) {
+        setProgress(100);
+        const ok = res === 0;
+        setTransferStatus(ok ? "success" : "error");
+        setStatusMessage(ok ? "Files received successfully." : "Receive failed. Transmission error.");
+        addLog(ok ? "Transfer complete — files written to disk" : "Transfer failed");
+      }
     } catch (err) {
-      clearInterval(interval);
+      electronAPI?.removeTransferProgressListener?.();
       setProgress(0);
       setTransferStatus("error");
       setStatusMessage(`Error: ${err.message}`);
@@ -148,15 +184,12 @@ const ReceivePanel = ({ onNavigate }) => {
     } finally {
       setIsListening(false);
       setIsTransferring(false);
-      // Restart discovery listener after transfer so device is visible again
-      setTimeout(() => {
-        startListener();
-        addLog("Discovery listener restarted");
-      }, 500);
+      setTimeout(() => { startListener(); addLog("Discovery listener restarted"); }, 500);
     }
   };
 
   const handleReset = () => {
+    electronAPI?.removeTransferProgressListener?.();
     setTransferStatus(null);
     setStatusMessage("");
     setProgress(0);
@@ -247,10 +280,9 @@ const ReceivePanel = ({ onNavigate }) => {
                   <span style={styles.sectionTitle}>Receive Mode</span>
                 </div>
                 <p style={styles.sectionDesc}>
-                  Press the button below to start discovery and open a socket on port {DEFAULT_PORT} to receive files.
+                  Open a socket on port {DEFAULT_PORT} and wait for an incoming transfer.
                 </p>
 
-                {/* Discovery loading indicator */}
                 {isDiscovering && (
                   <div style={styles.discoveryBlock}>
                     <div style={styles.radarContainer}>
@@ -260,12 +292,10 @@ const ReceivePanel = ({ onNavigate }) => {
                       </div>
                     </div>
                     <div style={styles.discoveryTextBlock}>
-                      <div style={styles.discoveryTitle}>INITIALIZING DISCOVERY</div>
-                      <div style={styles.discoverySubtext}>Broadcasting presence on local network...</div>
+                      <div style={styles.discoveryTitle}>INITIALIZING RECEIVER</div>
+                      <div style={styles.discoverySubtext}>Opening socket on port {DEFAULT_PORT}...</div>
                       <div style={styles.discoveryDots}>
-                        <span style={{...styles.dot, animationDelay: "0ms"}}></span>
-                        <span style={{...styles.dot, animationDelay: "200ms"}}></span>
-                        <span style={{...styles.dot, animationDelay: "400ms"}}></span>
+                        {[0,200,400].map(d => <span key={d} style={{...styles.dot, animationDelay: `${d}ms`}}></span>)}
                       </div>
                     </div>
                   </div>
@@ -341,9 +371,7 @@ const ReceivePanel = ({ onNavigate }) => {
                 {isScanning && (
                   <div style={styles.scanningBlock}>
                     <div style={styles.scanningDots}>
-                      <span style={{...styles.dot, animationDelay: "0ms"}}></span>
-                      <span style={{...styles.dot, animationDelay: "200ms"}}></span>
-                      <span style={{...styles.dot, animationDelay: "400ms"}}></span>
+                      {[0,200,400].map(d => <span key={d} style={{...styles.dot, animationDelay: `${d}ms`}}></span>)}
                     </div>
                     <span style={styles.scanningLabel}>Probing network hosts...</span>
                   </div>
@@ -363,16 +391,14 @@ const ReceivePanel = ({ onNavigate }) => {
               </section>
             </div>
 
-            {/* Right column: Event log + status */}
+            {/* Right column — Event log + system status */}
             <div style={styles.rightCol}>
               <div style={styles.logHeader}>
                 <span style={styles.logTitle}>EVENT LOG</span>
                 <span style={styles.logCount}>{log.length} entries</span>
               </div>
               <div style={styles.logBody}>
-                {log.length === 0 && (
-                  <div style={styles.logEmpty}>No events recorded.</div>
-                )}
+                {log.length === 0 && <div style={styles.logEmpty}>No events recorded.</div>}
                 {log.map((entry, i) => (
                   <div key={i} style={styles.logEntry}>
                     <span style={styles.logTs}>{entry.ts}</span>
@@ -387,6 +413,15 @@ const ReceivePanel = ({ onNavigate }) => {
                   <span style={styles.statusKey}>LISTENER</span>
                   <span style={{...styles.statusVal, ...(isListening ? styles.statusValOn : {})}}>
                     {isListening ? "ACTIVE" : "INACTIVE"}
+                  </span>
+                </div>
+                <div style={styles.statusRow}>
+                  <span style={styles.statusKey}>DISCOVERY</span>
+                  <span style={{
+                    ...styles.statusVal,
+                    ...(discoveryActiveRef.current && !isTransferring ? styles.statusValOn : {})
+                  }}>
+                    {isTransferring || isDiscovering ? "STOPPED" : discoveryActiveRef.current ? "ACTIVE" : "INACTIVE"}
                   </span>
                 </div>
                 <div style={styles.statusRow}>
@@ -422,512 +457,90 @@ const MONO = "'Courier New', 'Lucida Console', monospace";
 const SANS = "'Trebuchet MS', 'Arial Narrow', sans-serif";
 
 const styles = {
-  root: {
-    display: "flex",
-    minHeight: "100vh",
-    backgroundColor: "#0d0d0d",
-    color: "#e0e0e0",
-    fontFamily: SANS,
-  },
-  sidebar: {
-    width: "200px",
-    minWidth: "200px",
-    backgroundColor: "#111",
-    borderRight: "1px solid #2a2a2a",
-    display: "flex",
-    flexDirection: "column",
-    padding: "32px 0",
-  },
-  logo: {
-    fontFamily: MONO,
-    fontSize: "22px",
-    fontWeight: "700",
-    letterSpacing: "6px",
-    color: "#fff",
-    padding: "0 28px",
-    marginBottom: "48px",
-    borderLeft: "3px solid #2e7fd9",
-    paddingLeft: "28px",
-  },
-  nav: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "4px",
-    padding: "0 16px",
-    flex: 1,
-  },
-  navBtn: {
-    background: "transparent",
-    border: "none",
-    color: "#666",
-    fontFamily: MONO,
-    fontSize: "12px",
-    letterSpacing: "3px",
-    padding: "12px 16px",
-    textAlign: "left",
-    cursor: "pointer",
-    borderRadius: "4px",
-    transition: "all 0.2s",
-  },
-  navBtnActive: {
-    color: "#fff",
-    backgroundColor: "#1e1e1e",
-    borderLeft: "2px solid #2e7fd9",
-  },
-  sidebarFooter: {
-    padding: "0 28px",
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-  },
-  indicator: {
-    width: "8px",
-    height: "8px",
-    borderRadius: "50%",
-    backgroundColor: "#333",
-    transition: "all 0.3s",
-  },
-  indicatorActive: {
-    backgroundColor: "#2e7fd9",
-    boxShadow: "0 0 8px #2e7fd988",
-  },
-  footerLabel: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    letterSpacing: "2px",
-    color: "#444",
-  },
-  main: {
-    flex: 1,
-    display: "flex",
-    flexDirection: "column",
-  },
-  header: {
-    padding: "40px 48px 32px",
-    borderBottom: "1px solid #1e1e1e",
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "flex-end",
-  },
-  headerLabel: {
-    fontFamily: MONO,
-    fontSize: "11px",
-    letterSpacing: "4px",
-    color: "#2e7fd9",
-    marginBottom: "8px",
-  },
-  headerTitle: {
-    fontSize: "32px",
-    fontWeight: "700",
-    letterSpacing: "2px",
-    color: "#fff",
-    margin: 0,
-    textTransform: "uppercase",
-  },
-  portBadge: {
-    display: "flex",
-    flexDirection: "column",
-    alignItems: "flex-end",
-    gap: "4px",
-  },
-  portLabel: {
-    fontFamily: MONO,
-    fontSize: "9px",
-    letterSpacing: "3px",
-    color: "#444",
-  },
-  portNum: {
-    fontFamily: MONO,
-    fontSize: "28px",
-    color: "#2e7fd9",
-    letterSpacing: "4px",
-  },
-  content: {
-    padding: "48px",
-    flex: 1,
-  },
-  grid: {
-    display: "flex",
-    gap: "48px",
-  },
-  leftCol: {
-    flex: "0 0 480px",
-  },
-  rightCol: {
-    flex: 1,
-    display: "flex",
-    flexDirection: "column",
-  },
-  section: {
-    marginBottom: "8px",
-    transition: "opacity 0.3s",
-  },
-  sectionLocked: {
-    opacity: 0.35,
-    pointerEvents: "none",
-  },
-  sectionHeader: {
-    display: "flex",
-    alignItems: "baseline",
-    gap: "16px",
-    marginBottom: "12px",
-  },
-  sectionNum: {
-    fontFamily: MONO,
-    fontSize: "11px",
-    color: "#2e7fd9",
-    letterSpacing: "1px",
-  },
-  sectionTitle: {
-    fontSize: "15px",
-    fontWeight: "700",
-    letterSpacing: "2px",
-    textTransform: "uppercase",
-    color: "#ccc",
-  },
-  sectionDesc: {
-    fontSize: "13px",
-    color: "#555",
-    marginBottom: "20px",
-    letterSpacing: "0.5px",
-    lineHeight: "1.6",
-    fontFamily: MONO,
-    maxWidth: "420px",
-  },
-  divider: {
-    height: "1px",
-    backgroundColor: "#1a1a1a",
-    margin: "32px 0",
-  },
-  btn: {
-    background: "transparent",
-    border: "1px solid #444",
-    color: "#ccc",
-    fontFamily: MONO,
-    fontSize: "12px",
-    letterSpacing: "3px",
-    padding: "12px 28px",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    textTransform: "uppercase",
-  },
-  btnPrimary: {
-    background: "#2e7fd9",
-    border: "none",
-    color: "#fff",
-    fontFamily: MONO,
-    fontSize: "12px",
-    letterSpacing: "3px",
-    padding: "14px 36px",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    textTransform: "uppercase",
-  },
-  btnListening: {
-    background: "#1a4a80",
-  },
-  btnGhost: {
-    background: "transparent",
-    border: "1px solid #333",
-    color: "#666",
-    fontFamily: MONO,
-    fontSize: "11px",
-    letterSpacing: "2px",
-    padding: "14px 24px",
-    cursor: "pointer",
-    transition: "all 0.2s",
-    textTransform: "uppercase",
-  },
-  btnDisabled: {
-    opacity: 0.4,
-    cursor: "not-allowed",
-  },
-  dirDisplay: {
-    display: "flex",
-    alignItems: "center",
-    gap: "8px",
-    marginTop: "12px",
-    padding: "10px 14px",
-    border: "1px solid #1e1e1e",
-    backgroundColor: "#141414",
-    maxWidth: "420px",
-  },
-  dirIcon: {
-    fontFamily: MONO,
-    color: "#2e7fd9",
-    fontSize: "16px",
-  },
-  dirPath: {
-    fontFamily: MONO,
-    fontSize: "12px",
-    color: "#888",
-    overflow: "hidden",
-    textOverflow: "ellipsis",
-    whiteSpace: "nowrap",
-  },
-  progressBlock: {
-    marginBottom: "24px",
-    maxWidth: "420px",
-  },
-  progressHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    marginBottom: "8px",
-  },
-  progressLabel: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    letterSpacing: "3px",
-    color: "#555",
-  },
-  progressPct: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    color: "#2e7fd9",
-  },
-  progressBar: {
-    height: "3px",
-    backgroundColor: "#1e1e1e",
-    marginBottom: "16px",
-  },
-  progressFill: {
-    height: "100%",
-    backgroundColor: "#2e7fd9",
-    transition: "width 0.3s ease",
-  },
+  root: { display: "flex", minHeight: "100vh", backgroundColor: "#0d0d0d", color: "#e0e0e0", fontFamily: SANS },
+  sidebar: { width: "200px", minWidth: "200px", backgroundColor: "#111", borderRight: "1px solid #2a2a2a", display: "flex", flexDirection: "column", padding: "32px 0" },
+  logo: { fontFamily: MONO, fontSize: "22px", fontWeight: "700", letterSpacing: "6px", color: "#fff", padding: "0 28px", marginBottom: "48px", borderLeft: "3px solid #2e7fd9", paddingLeft: "28px" },
+  nav: { display: "flex", flexDirection: "column", gap: "4px", padding: "0 16px", flex: 1 },
+  navBtn: { background: "transparent", border: "none", color: "#666", fontFamily: MONO, fontSize: "12px", letterSpacing: "3px", padding: "12px 16px", textAlign: "left", cursor: "pointer", borderRadius: "4px", transition: "all 0.2s" },
+  navBtnActive: { color: "#fff", backgroundColor: "#1e1e1e", borderLeft: "2px solid #2e7fd9" },
+  sidebarFooter: { padding: "0 28px", display: "flex", alignItems: "center", gap: "8px" },
+  indicator: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#333", transition: "all 0.3s" },
+  indicatorActive: { backgroundColor: "#2e7fd9", boxShadow: "0 0 8px #2e7fd988" },
+  footerLabel: { fontFamily: MONO, fontSize: "10px", letterSpacing: "2px", color: "#444" },
+  main: { flex: 1, display: "flex", flexDirection: "column" },
+  header: { padding: "40px 48px 32px", borderBottom: "1px solid #1e1e1e", display: "flex", justifyContent: "space-between", alignItems: "flex-end" },
+  headerLabel: { fontFamily: MONO, fontSize: "11px", letterSpacing: "4px", color: "#2e7fd9", marginBottom: "8px" },
+  headerTitle: { fontSize: "32px", fontWeight: "700", letterSpacing: "2px", color: "#fff", margin: 0, textTransform: "uppercase" },
+  portBadge: { display: "flex", flexDirection: "column", alignItems: "flex-end", gap: "4px" },
+  portLabel: { fontFamily: MONO, fontSize: "9px", letterSpacing: "3px", color: "#444" },
+  portNum: { fontFamily: MONO, fontSize: "28px", color: "#2e7fd9", letterSpacing: "4px" },
+  content: { padding: "48px", flex: 1 },
+  grid: { display: "flex", gap: "48px" },
+  leftCol: { flex: "0 0 480px" },
+  rightCol: { flex: 1, display: "flex", flexDirection: "column" },
+  section: { marginBottom: "8px", transition: "opacity 0.3s" },
+  sectionLocked: { opacity: 0.35, pointerEvents: "none" },
+  sectionHeader: { display: "flex", alignItems: "baseline", gap: "16px", marginBottom: "12px" },
+  sectionNum: { fontFamily: MONO, fontSize: "11px", color: "#2e7fd9", letterSpacing: "1px" },
+  sectionTitle: { fontSize: "15px", fontWeight: "700", letterSpacing: "2px", textTransform: "uppercase", color: "#ccc" },
+  sectionDesc: { fontSize: "13px", color: "#555", marginBottom: "20px", letterSpacing: "0.5px", lineHeight: "1.6", fontFamily: MONO, maxWidth: "420px" },
+  divider: { height: "1px", backgroundColor: "#1a1a1a", margin: "32px 0" },
+  btn: { background: "transparent", border: "1px solid #444", color: "#ccc", fontFamily: MONO, fontSize: "12px", letterSpacing: "3px", padding: "12px 28px", cursor: "pointer", transition: "all 0.2s", textTransform: "uppercase" },
+  btnPrimary: { background: "#2e7fd9", border: "none", color: "#fff", fontFamily: MONO, fontSize: "12px", letterSpacing: "3px", padding: "14px 36px", cursor: "pointer", transition: "all 0.2s", textTransform: "uppercase" },
+  btnListening: { background: "#1a4a80" },
+  btnGhost: { background: "transparent", border: "1px solid #333", color: "#666", fontFamily: MONO, fontSize: "11px", letterSpacing: "2px", padding: "14px 24px", cursor: "pointer", transition: "all 0.2s", textTransform: "uppercase" },
+  btnDisabled: { opacity: 0.4, cursor: "not-allowed" },
+  dirDisplay: { display: "flex", alignItems: "center", gap: "8px", marginTop: "12px", padding: "10px 14px", border: "1px solid #1e1e1e", backgroundColor: "#141414", maxWidth: "420px" },
+  dirIcon: { fontFamily: MONO, color: "#2e7fd9", fontSize: "16px" },
+  dirPath: { fontFamily: MONO, fontSize: "12px", color: "#888", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" },
+  progressBlock: { marginBottom: "24px", maxWidth: "420px" },
+  progressHeader: { display: "flex", justifyContent: "space-between", marginBottom: "8px" },
+  progressLabel: { fontFamily: MONO, fontSize: "10px", letterSpacing: "3px", color: "#555" },
+  progressPct: { fontFamily: MONO, fontSize: "10px", color: "#2e7fd9" },
+  progressBar: { height: "3px", backgroundColor: "#1e1e1e", marginBottom: "16px" },
+  progressFill: { height: "100%", backgroundColor: "#2e7fd9", transition: "width 0.3s ease" },
   progressError: { backgroundColor: "#c0392b" },
   progressSuccess: { backgroundColor: "#3db06e" },
   progressWaiting: { backgroundColor: "#2e7fd9" },
-  statusBadge: {
-    display: "inline-block",
-    fontFamily: MONO,
-    fontSize: "10px",
-    letterSpacing: "3px",
-    padding: "6px 14px",
-    border: "1px solid #2a2a2a",
-    color: "#555",
-    marginBottom: "12px",
-  },
+  statusBadge: { display: "inline-block", fontFamily: MONO, fontSize: "10px", letterSpacing: "3px", padding: "6px 14px", border: "1px solid #2a2a2a", color: "#555", marginBottom: "12px" },
   statusWaiting: { borderColor: "#2e7fd9", color: "#2e7fd9" },
   statusSuccess: { borderColor: "#3db06e", color: "#3db06e" },
   statusError: { borderColor: "#c0392b", color: "#c0392b" },
-  statusMsg: {
-    fontFamily: MONO,
-    fontSize: "12px",
-    color: "#555",
-    letterSpacing: "0.5px",
-  },
-  actionRow: {
-    display: "flex",
-    gap: "12px",
-    alignItems: "center",
-  },
-  scanningBlock: {
-    display: "flex",
-    alignItems: "center",
-    gap: "12px",
-    marginTop: "16px",
-  },
-  scanningDots: {
-    display: "flex",
-    gap: "5px",
-    alignItems: "center",
-  },
-  dot: {
-    display: "inline-block",
-    width: "6px",
-    height: "6px",
-    borderRadius: "50%",
-    backgroundColor: "#2e7fd9",
-    animation: "scanPulse 1s infinite ease-in-out",
-  },
-  scanningLabel: {
-    fontFamily: MONO,
-    fontSize: "11px",
-    letterSpacing: "2px",
-    color: "#555",
-  },
-  ipList: {
-    marginTop: "12px",
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-  },
-  ipRow: {
-    display: "flex",
-    alignItems: "center",
-    gap: "10px",
-  },
-  ipDot: {
-    width: "6px",
-    height: "6px",
-    borderRadius: "50%",
-    backgroundColor: "#3db06e",
-    display: "inline-block",
-    flexShrink: 0,
-  },
-  ipText: {
-    fontFamily: MONO,
-    fontSize: "12px",
-    color: "#666",
-  },
-  logHeader: {
-    display: "flex",
-    justifyContent: "space-between",
-    alignItems: "center",
-    padding: "12px 16px",
-    backgroundColor: "#111",
-    border: "1px solid #1e1e1e",
-    borderBottom: "none",
-  },
-  logTitle: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    letterSpacing: "3px",
-    color: "#555",
-  },
-  logCount: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    color: "#333",
-  },
-  logBody: {
-    flex: 1,
-    minHeight: "200px",
-    maxHeight: "280px",
-    overflowY: "auto",
-    backgroundColor: "#0a0a0a",
-    border: "1px solid #1e1e1e",
-    padding: "16px",
-  },
-  logEmpty: {
-    fontFamily: MONO,
-    fontSize: "11px",
-    color: "#2a2a2a",
-    letterSpacing: "1px",
-  },
-  logEntry: {
-    display: "flex",
-    gap: "16px",
-    marginBottom: "8px",
-    alignItems: "flex-start",
-  },
-  logTs: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    color: "#333",
-    whiteSpace: "nowrap",
-    flexShrink: 0,
-  },
-  logMsg: {
-    fontFamily: MONO,
-    fontSize: "11px",
-    color: "#555",
-    letterSpacing: "0.3px",
-  },
-  statusPanel: {
-    border: "1px solid #1e1e1e",
-    borderTop: "none",
-    backgroundColor: "#111",
-    padding: "16px",
-  },
-  statusPanelTitle: {
-    fontFamily: MONO,
-    fontSize: "9px",
-    letterSpacing: "3px",
-    color: "#333",
-    marginBottom: "12px",
-  },
-  statusRow: {
-    display: "flex",
-    justifyContent: "space-between",
-    marginBottom: "8px",
-  },
-  statusKey: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    letterSpacing: "2px",
-    color: "#444",
-  },
-  statusVal: {
-    fontFamily: MONO,
-    fontSize: "10px",
-    color: "#666",
-  },
+  statusMsg: { fontFamily: MONO, fontSize: "12px", color: "#555", letterSpacing: "0.5px" },
+  actionRow: { display: "flex", gap: "12px", alignItems: "center" },
+  scanningBlock: { display: "flex", alignItems: "center", gap: "12px", marginTop: "16px" },
+  scanningDots: { display: "flex", gap: "5px", alignItems: "center" },
+  dot: { display: "inline-block", width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#2e7fd9", animation: "scanPulse 1s infinite ease-in-out" },
+  scanningLabel: { fontFamily: MONO, fontSize: "11px", letterSpacing: "2px", color: "#555" },
+  ipList: { marginTop: "12px", display: "flex", flexDirection: "column", gap: "6px" },
+  ipRow: { display: "flex", alignItems: "center", gap: "10px" },
+  ipDot: { width: "6px", height: "6px", borderRadius: "50%", backgroundColor: "#3db06e", display: "inline-block", flexShrink: 0 },
+  ipText: { fontFamily: MONO, fontSize: "12px", color: "#666" },
+  logHeader: { display: "flex", justifyContent: "space-between", alignItems: "center", padding: "12px 16px", backgroundColor: "#111", border: "1px solid #1e1e1e", borderBottom: "none" },
+  logTitle: { fontFamily: MONO, fontSize: "10px", letterSpacing: "3px", color: "#555" },
+  logCount: { fontFamily: MONO, fontSize: "10px", color: "#333" },
+  logBody: { flex: 1, minHeight: "200px", maxHeight: "280px", overflowY: "auto", backgroundColor: "#0a0a0a", border: "1px solid #1e1e1e", padding: "16px" },
+  logEmpty: { fontFamily: MONO, fontSize: "11px", color: "#2a2a2a", letterSpacing: "1px" },
+  logEntry: { display: "flex", gap: "16px", marginBottom: "8px", alignItems: "flex-start" },
+  logTs: { fontFamily: MONO, fontSize: "10px", color: "#333", whiteSpace: "nowrap", flexShrink: 0 },
+  logMsg: { fontFamily: MONO, fontSize: "11px", color: "#555", letterSpacing: "0.3px" },
+  statusPanel: { border: "1px solid #1e1e1e", borderTop: "none", backgroundColor: "#111", padding: "16px" },
+  statusPanelTitle: { fontFamily: MONO, fontSize: "9px", letterSpacing: "3px", color: "#333", marginBottom: "12px" },
+  statusRow: { display: "flex", justifyContent: "space-between", marginBottom: "8px" },
+  statusKey: { fontFamily: MONO, fontSize: "10px", letterSpacing: "2px", color: "#444" },
+  statusVal: { fontFamily: MONO, fontSize: "10px", color: "#666" },
   statusValOn: { color: "#2e7fd9" },
   statusValSuccess: { color: "#3db06e" },
   statusValError: { color: "#c0392b" },
-
-  // Discovery loading styles
-  discoveryBlock: {
-    display: "flex",
-    alignItems: "center",
-    gap: "24px",
-    padding: "24px",
-    marginBottom: "24px",
-    backgroundColor: "#0f1a26",
-    border: "1px solid #1a3050",
-    borderRadius: "4px",
-    maxWidth: "420px",
-    animation: "fadeInUp 0.4s ease-out",
-  },
-  radarContainer: {
-    flexShrink: 0,
-  },
-  radarOuter: {
-    width: "48px",
-    height: "48px",
-    borderRadius: "50%",
-    border: "2px solid #1a3050",
-    position: "relative",
-    overflow: "hidden",
-    display: "flex",
-    alignItems: "center",
-    justifyContent: "center",
-  },
-  radarInner: {
-    width: "8px",
-    height: "8px",
-    borderRadius: "50%",
-    backgroundColor: "#2e7fd9",
-    boxShadow: "0 0 12px #2e7fd9aa",
-    zIndex: 2,
-  },
-  radarSweep: {
-    position: "absolute",
-    top: 0,
-    left: "50%",
-    width: "50%",
-    height: "50%",
-    transformOrigin: "bottom left",
-    background: "conic-gradient(from 0deg, transparent, #2e7fd944)",
-    animation: "radarSpin 1.5s linear infinite",
-    zIndex: 1,
-  },
-  discoveryTextBlock: {
-    display: "flex",
-    flexDirection: "column",
-    gap: "6px",
-  },
-  discoveryTitle: {
-    fontFamily: MONO,
-    fontSize: "11px",
-    letterSpacing: "3px",
-    color: "#2e7fd9",
-    fontWeight: "700",
-  },
-  discoverySubtext: {
-    fontFamily: MONO,
-    fontSize: "11px",
-    color: "#456",
-    letterSpacing: "0.5px",
-  },
-  discoveryDots: {
-    display: "flex",
-    gap: "5px",
-    alignItems: "center",
-    marginTop: "4px",
-  },
+  discoveryBlock: { display: "flex", alignItems: "center", gap: "24px", padding: "24px", marginBottom: "24px", backgroundColor: "#0f1a26", border: "1px solid #1a3050", borderRadius: "4px", maxWidth: "420px", animation: "fadeInUp 0.4s ease-out" },
+  radarContainer: { flexShrink: 0 },
+  radarOuter: { width: "48px", height: "48px", borderRadius: "50%", border: "2px solid #1a3050", position: "relative", overflow: "hidden", display: "flex", alignItems: "center", justifyContent: "center" },
+  radarInner: { width: "8px", height: "8px", borderRadius: "50%", backgroundColor: "#2e7fd9", boxShadow: "0 0 12px #2e7fd9aa", zIndex: 2 },
+  radarSweep: { position: "absolute", top: 0, left: "50%", width: "50%", height: "50%", transformOrigin: "bottom left", background: "conic-gradient(from 0deg, transparent, #2e7fd944)", animation: "radarSpin 1.5s linear infinite", zIndex: 1 },
+  discoveryTextBlock: { display: "flex", flexDirection: "column", gap: "6px" },
+  discoveryTitle: { fontFamily: MONO, fontSize: "11px", letterSpacing: "3px", color: "#2e7fd9", fontWeight: "700" },
+  discoverySubtext: { fontFamily: MONO, fontSize: "11px", color: "#456", letterSpacing: "0.5px" },
+  discoveryDots: { display: "flex", gap: "5px", alignItems: "center", marginTop: "4px" },
 };
 
 export default ReceivePanel;
