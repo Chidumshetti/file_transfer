@@ -2,11 +2,11 @@ name: Build & Release
 
 on:
   push:
-    branches: [ "chida/major_update" ]
+    branches: [ "main" ]
     tags:
       - "v*"                          # triggers GitHub Release
   pull_request:
-    branches: [ "chida/major_update" ]
+    branches: [ "main" ]
   workflow_dispatch:
 
 jobs:
