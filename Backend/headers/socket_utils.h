@@ -12,8 +12,8 @@
     typedef SOCKET socket_t;
     typedef int socklen_t;
 
-    #define INVALID_SOCKET  INVALID_SOCKET  // already defined by winsock2.h
-    #define close_sock      closesocket
+    // ✅ REMOVED the circular #define INVALID_SOCKET INVALID_SOCKET
+    // winsock2.h already defines it — nothing needed here
 
 #else
     #include <unistd.h>
@@ -21,21 +21,22 @@
     #include <sys/types.h>
     #include <arpa/inet.h>
     #include <netinet/in.h>
-    #include <netdb.h>          // ✅ getaddrinfo, freeaddrinfo, addrinfo
-    #include <ifaddrs.h>        // ✅ getifaddrs, freeifaddrs
+    #include <netdb.h>
+    #include <ifaddrs.h>
     #include <net/if.h>
     #include <cerrno>
 
     typedef int socket_t;
 
-    // ✅ Define Windows constants so shared code compiles on Linux too
-    #define INVALID_SOCKET  (-1)
-    #define SOCKET_ERROR    (-1)
-    #define close_sock      close
+    #ifndef INVALID_SOCKET
+      #define INVALID_SOCKET  (-1)
+    #endif
+    #ifndef SOCKET_ERROR
+      #define SOCKET_ERROR    (-1)
+    #endif
 
 #endif
 
-// Cross-platform socket lifecycle helpers
 void init_sockets();
 void cleanup_sockets();
 void close_socket(socket_t sock);
