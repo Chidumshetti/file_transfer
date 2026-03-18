@@ -4,8 +4,8 @@
 #include <string>
 #include <vector>
 #include <iostream>  
-#include "../backend/headers/network.h"
-#include "../backend/headers/Send_recieve.h"
+#include "../Backend/headers/network.h"
+#include "../Backend/headers/Send_recieve.h"
 
 // Declaration of C++ core function
 int run_transfer(const std::string& mode, const std::string& ip_or_port, const std::string& port_or_outputdir, const std::string& directory = "") {
