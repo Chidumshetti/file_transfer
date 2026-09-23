@@ -55,13 +55,6 @@ jobs:
             libudev-dev \
             upx-ucl
 
-      - name: Install Windows deps
-        if: matrix.platform == 'windows'
-        shell: pwsh
-        run: |
-          npm install -g node-gyp@latest
-          npm config set node_gyp "$(npm prefix -g)\node_modules\node-gyp\bin\node-gyp.js"
-
       # ════════════════════════════════════════════════════════════
       # STEP A: Native addon
       # ════════════════════════════════════════════════════════════
