@@ -4,14 +4,14 @@ on:
   push:
     branches: [ "main" ]
     tags:
-      - "v*"  
+      - "v*"
   pull_request:
     branches: [ "main" ]
   workflow_dispatch:
 
 permissions:
-    actions: write
-    contents: write
+  contents: write
+
 jobs:
   build:
     strategy:
@@ -26,7 +26,7 @@ jobs:
             platform: linux
             artifact_name: linux-ubuntu24
 
-          - os: windows-latest
+          - os: windows-2022
             platform: windows
             artifact_name: windows-x64
 
@@ -58,14 +58,16 @@ jobs:
       - name: Install Windows deps
         if: matrix.platform == 'windows'
         shell: pwsh
-        run: npm install -g node-gyp
+        run: |
+          npm install -g node-gyp@latest
+          npm config set node_gyp "$(npm prefix -g)\node_modules\node-gyp\bin\node-gyp.js"
 
       # ════════════════════════════════════════════════════════════
       # STEP A: Native addon
       # ════════════════════════════════════════════════════════════
       - name: addon — install
         working-directory: addon
-        run: npm i
+        run: npm i --ignore-scripts
 
       - name: addon — configure
         working-directory: addon
@@ -135,37 +137,12 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           NODE_ENV: production
 
-      # ════════════════════════════════════════════════════════════
-      # 🔥 Delete OLD artifacts (same name)
-      # ════════════════════════════════════════════════════════════
-      - name: Delete previous artifacts
-        uses: actions/github-script@v7
-        with:
-          script: |
-            const artifactName = "${{ matrix.artifact_name }}";
-
-            const { data } = await github.rest.actions.listArtifactsForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              per_page: 100
-            });
-
-            const matches = data.artifacts.filter(a => a.name === artifactName);
-
-            for (const artifact of matches) {
-              core.info(`Deleting ${artifact.name} (ID: ${artifact.id})`);
-              await github.rest.actions.deleteArtifact({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                artifact_id: artifact.id
-              });
-            }
-
-      # ── Upload artifact ─────────────────────────────────────────
+      # ── Upload artifact (replaces any older one with the same name) ──
       - name: Upload build artifact
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
+          overwrite: true
           path: |
             electron/dist/*.exe
             electron/dist/*.AppImage
